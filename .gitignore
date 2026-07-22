@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+kakao_token.json
+seen_papers.json
+
+.claude/
