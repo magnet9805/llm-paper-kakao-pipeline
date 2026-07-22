@@ -30,10 +30,10 @@ def _summarize_one(client: genai.Client, paper: dict) -> str:
         contents=f"제목: {paper['title']}\n\n초록: {paper['abstract']}",
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
-            max_output_tokens=300,
-            # 이 모델은 기본적으로 내부 reasoning(thinking) 토큰을 쓰는데, 단순 요약에는
-            # 불필요하고 max_output_tokens 예산을 thinking이 다 잡아먹어 답변이 잘리므로 끈다.
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            # 이 모델은 내부 reasoning(thinking) 토큰을 자동으로 쓰는데 요청마다 편차가 크고
+            # (실측 300~1600+), thinking_budget으로 끄거나 제한하는 것도 이제 거부되거나
+            # 무시된다. 그래서 thinking + 답변이 항상 다 들어가도록 넉넉하게 잡는다.
+            max_output_tokens=3000,
         ),
     )
     summary = response.text.strip()
