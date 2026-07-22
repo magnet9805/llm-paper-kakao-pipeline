@@ -112,16 +112,23 @@ def create_keyword_group(
             (user_id, title, source),
         )
         group_id = cursor.lastrowid
-        conn.executemany(
-            "INSERT INTO keywords (group_id, keyword_text) VALUES (?, ?)",
-            [(group_id, kw) for kw in keywords],
-        )
 
-    return {"id": group_id, "title": title, "source": source, "keywords": keywords}
+        saved_keywords = []
+        for kw in keywords:
+            kw_cursor = conn.execute(
+                "INSERT INTO keywords (group_id, keyword_text) VALUES (?, ?)", (group_id, kw)
+            )
+            saved_keywords.append({"id": kw_cursor.lastrowid, "text": kw})
+
+    return {"id": group_id, "title": title, "source": source, "keywords": saved_keywords}
 
 
 def list_keyword_groups(user_id: int) -> list[dict]:
-    """마이페이지에서 보여줄, 이 사용자의 키워드 그룹 전체를 키워드와 함께 반환한다."""
+    """
+    마이페이지에서 보여줄, 이 사용자의 키워드 그룹 전체를 키워드와 함께 반환한다.
+    keywords는 문자열이 아니라 {id, text} 형태로 반환한다 - 화면에서 키워드 하나를
+    개별 삭제하려면 그 키워드의 고유 id가 있어야 하기 때문이다.
+    """
     with get_connection() as conn:
         groups = conn.execute(
             "SELECT id, title, source, created_at FROM keyword_groups "
@@ -132,7 +139,7 @@ def list_keyword_groups(user_id: int) -> list[dict]:
         result = []
         for group in groups:
             keyword_rows = conn.execute(
-                "SELECT keyword_text FROM keywords WHERE group_id = ?", (group["id"],)
+                "SELECT id, keyword_text FROM keywords WHERE group_id = ?", (group["id"],)
             ).fetchall()
             result.append(
                 {
@@ -140,7 +147,69 @@ def list_keyword_groups(user_id: int) -> list[dict]:
                     "title": group["title"],
                     "source": group["source"],
                     "created_at": group["created_at"],
-                    "keywords": [row["keyword_text"] for row in keyword_rows],
+                    "keywords": [
+                        {"id": row["id"], "text": row["keyword_text"]} for row in keyword_rows
+                    ],
                 }
             )
         return result
+
+
+def update_keyword_group_title(user_id: int, group_id: int, title: str) -> bool:
+    """
+    그룹 제목을 수정한다. WHERE 절에 user_id도 같이 넣어서, 남의 그룹 id를 넣어도
+    수정되지 않도록 막는다 (소유권 확인). 실제로 수정된 행이 있었으면 True.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE keyword_groups SET title = ? WHERE id = ? AND user_id = ?",
+            (title, group_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_keyword_group(user_id: int, group_id: int) -> bool:
+    """그룹을 통째로 삭제한다. 소속 keywords는 ON DELETE CASCADE로 같이 지워진다."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM keyword_groups WHERE id = ? AND user_id = ?", (group_id, user_id)
+        )
+        return cursor.rowcount > 0
+
+
+def add_keyword(user_id: int, group_id: int, keyword_text: str) -> dict | None:
+    """
+    그룹에 키워드를 하나 추가한다. 그룹이 이 사용자 소유가 맞는지 먼저 확인하고,
+    아니면(다른 사람 그룹이거나 없는 그룹이면) None을 반환해 API가 404/403으로
+    처리할 수 있게 한다.
+    """
+    with get_connection() as conn:
+        owned = conn.execute(
+            "SELECT id FROM keyword_groups WHERE id = ? AND user_id = ?", (group_id, user_id)
+        ).fetchone()
+        if owned is None:
+            return None
+
+        cursor = conn.execute(
+            "INSERT INTO keywords (group_id, keyword_text) VALUES (?, ?)",
+            (group_id, keyword_text),
+        )
+        return {"id": cursor.lastrowid, "text": keyword_text}
+
+
+def delete_keyword(user_id: int, keyword_id: int) -> bool:
+    """
+    키워드 하나를 삭제한다. keywords 테이블 자체에는 user_id가 없으므로,
+    keyword_groups와 조인해서 "이 키워드가 속한 그룹이 이 사용자 소유인지"를
+    같이 확인한다.
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM keywords
+            WHERE id = ?
+              AND group_id IN (SELECT id FROM keyword_groups WHERE user_id = ?)
+            """,
+            (keyword_id, user_id),
+        )
+        return cursor.rowcount > 0

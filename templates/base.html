@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}관심 논문 알리미{% endblock %}</title>
+    <style>
+        :root {
+            --kakao: #FEE500;
+            --ink: #17181c;
+            --ink-soft: #5b5d66;
+            --paper: #ffffff;
+            --paper-soft: #f6f6f8;
+            --border: #e7e7ec;
+            --danger: #e5484d;
+            --radius: 14px;
+            --shadow: 0 4px 20px rgba(20, 20, 40, 0.06);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+            color: var(--ink);
+            background: var(--paper-soft);
+        }
+        .page { max-width: 640px; margin: 0 auto; padding: 96px 20px 80px; }
+
+        nav.topnav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 24px clamp(20px, 5vw, 56px);
+        }
+        nav.topnav .brand { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; text-decoration: none; color: inherit; }
+        nav.topnav .links { display: flex; align-items: center; gap: 28px; font-size: 15px; font-weight: 600; }
+        nav.topnav a, nav.topnav .logout-btn {
+            color: inherit; text-decoration: none; opacity: 0.85; transition: opacity .15s;
+            background: none; border: none; font: inherit; cursor: pointer; padding: 0;
+        }
+        nav.topnav a:hover, nav.topnav .logout-btn:hover { opacity: 1; }
+
+        body.page-hero nav.topnav { position: absolute; top: 0; left: 0; right: 0; color: #fff; z-index: 2; }
+        body:not(.page-hero) nav.topnav { color: var(--ink); position: absolute; top: 0; left: 0; right: 0; }
+
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            border: none; border-radius: 999px; padding: 13px 28px;
+            font-size: 15px; font-weight: 700; cursor: pointer; text-decoration: none;
+            transition: transform .15s ease, box-shadow .15s ease;
+        }
+        .btn:hover { transform: translateY(-1px); }
+        .btn-kakao { background: var(--kakao); color: #191919; box-shadow: 0 6px 18px rgba(254,229,0,0.35); }
+        .btn-outline { background: transparent; color: var(--ink); border: 1.5px solid var(--border); box-shadow: none; }
+        .btn-outline:hover { border-color: var(--ink); }
+    </style>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+    <nav class="topnav">
+        <a class="brand" href="/">관심 논문 알리미</a>
+        <span class="links">
+            <a href="/">홈</a>
+            {% if user %}
+                <a href="/mypage">마이페이지</a>
+                <button class="logout-btn" onclick="logout()">로그아웃</button>
+            {% endif %}
+        </span>
+    </nav>
+    {% block content %}{% endblock %}
+    <script>
+        function logout() {
+            fetch('/auth/logout', {method: 'POST'}).then(() => location.href = '/');
+        }
+    </script>
+</body>
+</html>

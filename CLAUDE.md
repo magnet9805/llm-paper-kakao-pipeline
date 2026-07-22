@@ -49,7 +49,8 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
 1. [x] MVP: HF Daily Papers 수집 + 키워드 필터 + Gemini API(무료 티어) 요약 + 카카오 발송 (개인용 스크립트)
 2. [ ] FastAPI + 카카오 소셜 로그인 + DB(SQLite)로 멀티유저 구조 전환
    - [x] 2-1. 카카오 소셜 로그인 (Authlib) - 회원가입/로그인 통합 (server.py, db.py)
-   - [x] 2-2. 관심 키워드 "직접 입력" 플로우 (그룹 생성 + 키워드 저장 API + 마이페이지 조회) (POST/GET /api/keyword-groups)
+   - [x] 2-2. 관심 키워드 "직접 입력" 플로우 (그룹 생성/수정/삭제 + 키워드 추가/삭제 API +
+     마이페이지 조회/편집 UI) (`/api/keyword-groups` 전체 CRUD, `templates/` 프론트엔드 포함)
    - 2-3. 기존 collector.py를 사용자별 키워드로 파라미터화해서 카카오 발송까지 연결
    - 2-4. LLM 대화형 키워드 추출 (아래 스펙대로 구현)
 3. [ ] Docker 컨테이너화
@@ -100,7 +101,7 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
 GET  /auth/kakao/login     → 카카오 로그인 페이지로 리다이렉트
 GET  /auth/kakao/callback  → 인증 코드 받아서 토큰 교환, users 테이블에 upsert, 세션 쿠키 발급
 POST /auth/logout          → 세션 쿠키 삭제
-GET  /auth/me              → 현재 로그인한 사용자 정보
+GET  /auth/me              → 현재 로그인한 사용자 정보 (JSON API)
 ```
 
 `signup`이 따로 없음 - 콜백에서 처음 오는 `kakao_id`면 새로 생성, 이미 있으면 로그인 처리.
@@ -108,6 +109,16 @@ GET  /auth/me              → 현재 로그인한 사용자 정보
 기존 `kakao_auth_helper.py`(개인용 1회성 수동 인증 스크립트)는 이 플로우로 대체됨.
 `kakao_sender.py`의 토큰 자동 갱신 로직(refresh_token 사용)은 그대로 재사용 가능
 (단, `.env`가 아니라 DB의 사용자별 토큰을 읽어오도록 수정 필요).
+
+**Authlib + 카카오 연동 시 겪은 함정 (공식 문서에 없고 실전에서 확인된 내용):**
+- `oauth.register(...)`에 `token_endpoint_auth_method="client_secret_post"`를 명시해야 함.
+  기본값(`client_secret_basic`, client_id/secret을 HTTP Basic 헤더로 전송)을 쓰면 카카오
+  토큰 엔드포인트가 `invalid_client: Not exist client_id [null]` 에러를 반환한다 - 카카오는
+  client_id/secret을 폼 body 파라미터로만 받는다.
+- 닉네임/프로필 사진은 "선택 동의" 항목이라, `client_kwargs={"scope": "..."}`에
+  `profile_nickname profile_image`를 명시적으로 넣어야 응답에 채워진다. (마찬가지로
+  카카오톡 메시지 전송 권한은 `talk_message`를 넣어야 함 - 위 참고.) 안 넣으면 로그인은
+  되지만 `nickname`/`profile_image_url`이 조용히 `null`로 온다.
 
 ## DB 스키마 (SQLite, 로컬 프로토타입 기준)
 
@@ -139,6 +150,57 @@ CREATE TABLE keywords (
     keyword_text TEXT NOT NULL
 );
 ```
+
+> SQLite는 `ON DELETE CASCADE`를 기본적으로 무시한다 - 연결마다 `PRAGMA foreign_keys = ON`을
+> 실행해야 실제로 동작한다 (`db.py`의 `get_connection()`에 이미 반영되어 있음).
+
+**관심 키워드 그룹 API 엔드포인트 (구현 완료, `server.py`):**
+```
+POST   /api/keyword-groups                       # 그룹 생성 (title, keywords[]) - source="manual" 고정
+GET    /api/keyword-groups                        # 내 그룹 목록 조회 (마이페이지용)
+PATCH  /api/keyword-groups/{group_id}              # 그룹 제목 수정
+DELETE /api/keyword-groups/{group_id}              # 그룹 전체 삭제 (키워드도 CASCADE로 같이 삭제)
+POST   /api/keyword-groups/{group_id}/keywords     # 그룹에 키워드 하나 추가
+DELETE /api/keywords/{keyword_id}                  # 키워드 하나 삭제
+```
+모든 엔드포인트는 `require_login` 의존성으로 로그인을 요구하고, 그룹/키워드가 요청한
+사용자 소유인지 SQL의 `WHERE user_id = ?` 절로 확인한다 (남의 그룹 id를 넣어도 404).
+
+## 프론트엔드 (서버 렌더링, `templates/`)
+
+React/Vue 같은 SPA 프레임워크는 쓰지 않고, FastAPI의 `Jinja2Templates`로 서버에서
+HTML을 직접 렌더링한다 - 이 프로젝트의 리소스는 백엔드/LLM 파이프라인에 집중하는 게
+설계 원칙이라, 프론트는 최소 구성으로 감. 상태가 필요한 부분(모달 열기/닫기, 키워드
+칩 편집)만 바닐라 JS로 처리하고, 화면 전환은 그냥 서버 라우트 이동.
+
+**파일 구성:**
+- `templates/base.html`: 공통 레이아웃. 상단 네비(홈/마이페이지/로그아웃), 전역 CSS
+  변수(`--kakao`, `--ink`, `--radius` 등), `logout()` 함수를 여기 한 곳에 둠.
+- `templates/index.html`: 홈 화면 (`GET /`). 전체 화면 히어로 섹션 - 실제 사진 대신
+  그라디언트 배경 + 인라인 SVG(문서+카카오톡 말풍선 모양 일러스트)로 "관심 논문을
+  카카오톡으로 받는다"는 컨셉을 표현함 (외부 이미지 URL에 의존하지 않아 깨질 일이 없음).
+  로그인 여부에 따라 로그인 버튼 또는 마이페이지 링크를 보여줌.
+- `templates/mypage.html`: 마이페이지 (`GET /mypage`). 키워드 그룹 목록 + 그룹별
+  수정/삭제 아이콘 버튼(연필/휴지통, 그룹 박스 우측) + "+ 새 그룹 등록" 토글 버튼.
+
+**마이페이지 편집 UX (중요 - 2-4에서도 재사용할 패턴):**
+- [수정] 아이콘 클릭 → 페이지 안에서 인라인으로 바뀌지 않고 **팝업(모달)**이 뜸.
+  모달 안에서 제목 입력창 + 키워드 칩 목록을 편집.
+- 키워드 삭제: 칩 옆 `✕` 클릭 → "삭제하시겠습니까?" confirm() → 확인 시 즉시 DELETE
+  API 호출 + "삭제되었습니다" alert(). 이 삭제/추가는 모달의 [저장]과 별개로 즉시
+  서버에 반영됨 (제목 변경만 [저장]을 눌러야 반영).
+- 키워드 추가: 목록 끝의 `+` 클릭 → 기존 키워드 칩과 똑같은 모양(회색 알약)의 칸이
+  텍스트 입력 가능한 상태로 바뀌고, 오른쪽에 `✓`(확정) - `✕`(취소) 순서로 버튼이 붙음.
+  엔터 또는 `✓` 클릭으로 확정. 공백/특수문자만 입력한 경우는 무시(`isValidKeywordText`).
+  [저장] 버튼을 누르면, `✓`를 안 눌렀어도 입력 중이던 유효한 텍스트가 있으면 그것도
+  같이 커밋한다 (깜빡하고 저장만 누르는 경우를 위한 배려).
+- 모달에서 바뀐 내용(제목/키워드)은 모달을 닫기 전에 뒤에 깔린 마이페이지 카드에도
+  바로 반영됨 (새로고침 불필요) - `groups_json`으로 서버가 내려준 데이터를 JS
+  `groupsData` 배열에 캐싱해두고 그걸 기준으로 모달/메인 목록을 둘 다 다시 그림.
+- **이 x-삭제(confirm 팝업) / +-추가(체크·엑스 버튼) 패턴은 로드맵 2-4(LLM 대화형
+  키워드 추출)의 칩 선택 UI에도 그대로 재사용할 것.**
+- "+ 새 그룹 등록"은 상시 노출된 폼이 아니라, 클릭 전엔 점선 테두리 버튼(호버 시
+  테두리 강조)만 보이고 클릭하면 폼이 펼쳐지는 방식.
 
 ## LLM 대화형 키워드 추출 - 확정된 스펙
 

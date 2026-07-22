@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page">
+<h1 class="page-title">마이페이지</h1>
+<p class="page-sub">{{ user.nickname }}님의 관심 키워드 그룹</p>
+
+<div id="groups">
+{% for g in groups %}
+    <div class="group" data-group-id="{{ g.id }}">
+        <div class="group-main">
+            <h3 class="group-title">{{ g.title }}</h3>
+            <div class="keywords">
+                {% for kw in g.keywords %}<span class="keyword">{{ kw.text }}</span>{% endfor %}
+            </div>
+        </div>
+        <div class="group-icons">
+            <button class="icon-btn" title="수정" onclick="openEditModal({{ g.id }})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17">
+                    <path d="M16.862 4.487a2.06 2.06 0 1 1 2.914 2.914L8.9 18.277l-4.243 1.06 1.061-4.242L16.862 4.487Z"/>
+                    <path d="M15.2 6.1 17.9 8.8"/>
+                </svg>
+            </button>
+            <button class="icon-btn icon-btn-danger" title="삭제" onclick="deleteGroup({{ g.id }})">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17">
+                    <path d="M4 7h16"/>
+                    <path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/>
+                    <path d="M6 7l1 13.2A2 2 0 0 0 9 22h6a2 2 0 0 0 2-1.8L18 7"/>
+                    <path d="M10 11v6M14 11v6"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+{% else %}
+    <p class="empty">아직 등록한 키워드 그룹이 없습니다.</p>
+{% endfor %}
+</div>
+
+<button class="add-group-btn" id="add-group-toggle" onclick="toggleAddForm()">+ 새 그룹 등록</button>
+<form id="add-group-form" class="add-group-form" onsubmit="createGroup(event)">
+    <input type="text" id="title" placeholder="그룹 제목 (예: LLM 추론 최적화)" required>
+    <input type="text" id="keywords" placeholder="키워드를 쉼표로 구분해서 입력 (예: RAG, multi-agent)" required>
+    <div class="add-group-actions">
+        <button type="submit" class="btn btn-kakao">등록</button>
+        <button type="button" class="btn btn-outline" onclick="toggleAddForm()">취소</button>
+    </div>
+</form>
+
+<!-- 그룹 수정 팝업. 하나만 만들어두고, [수정] 누른 그룹에 맞춰 내용만 채워서 재사용한다. -->
+<div id="edit-modal-overlay" class="modal-overlay" onclick="if (event.target === this) closeEditModal()">
+    <div class="modal">
+        <h3>키워드 그룹 수정</h3>
+        <input type="text" id="modal-title-input" class="title-input">
+        <div id="modal-keywords" class="keywords"></div>
+        <div class="modal-buttons">
+            <button class="btn btn-kakao" onclick="saveModal()">저장</button>
+            <button class="btn btn-outline" onclick="closeEditModal()">닫기</button>
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- groups를 JS에서도 쓸 수 있도록 JSON으로 그대로 내려보낸다 (모달을 열 때마다
+     서버에 다시 물어보지 않고, 이미 받은 데이터로 바로 채워 넣기 위함). -->
+<script id="groups-data" type="application/json">{{ groups_json | safe }}</script>
+
+<style>
+    .page-title { font-size: 26px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.02em; }
+    .page-sub { color: var(--ink-soft); margin: 0 0 28px; font-size: 14px; }
+    .empty { color: var(--ink-soft); font-size: 14px; }
+
+    .group {
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+        background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow);
+    }
+    .group-title { margin: 0 0 10px; font-size: 16px; font-weight: 700; }
+    .group-icons { display: flex; gap: 6px; flex-shrink: 0; }
+    .icon-btn {
+        width: 34px; height: 34px; border-radius: 50%; border: none;
+        background: var(--paper-soft); color: var(--ink-soft);
+        display: flex; align-items: center; justify-content: center;
+        cursor: pointer; transition: background .15s, color .15s;
+    }
+    .icon-btn:hover { background: #ececf1; color: var(--ink); }
+    .icon-btn-danger:hover { background: rgba(229, 72, 77, 0.12); color: var(--danger); }
+
+    .keyword { display: inline-flex; align-items: center; background: #f0f0f0; border-radius: 12px; padding: 2px 10px; margin: 2px 4px 2px 0; font-size: 13px; }
+    .kw-x, .kw-check { cursor: pointer; margin-left: 6px; color: #999; }
+    .kw-x:hover { color: #c00; }
+    .kw-check:hover { color: #1a7f37; }
+    .kw-add { display: inline-block; background: #f0f0f0; border-radius: 12px; padding: 2px 12px; margin: 2px; font-size: 13px; cursor: pointer; }
+    .kw-input-chip input { border: none; background: transparent; font-size: 13px; width: 90px; outline: none; }
+
+    .add-group-btn {
+        width: 100%; padding: 16px; border-radius: var(--radius);
+        border: 1.5px dashed var(--border); background: transparent;
+        color: var(--ink-soft); font-size: 14px; font-weight: 600; cursor: pointer;
+        transition: border-color .18s, color .18s, background .18s;
+    }
+    .add-group-btn:hover { border-color: var(--ink); color: var(--ink); background: var(--paper-soft); }
+
+    .add-group-form {
+        display: none; margin-top: 12px; padding: 18px;
+        background: var(--paper); border: 1px solid var(--border);
+        border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .add-group-form input[type=text] {
+        width: 100%; padding: 11px 14px; margin-bottom: 10px;
+        border: 1px solid var(--border); border-radius: 10px; font-size: 14px;
+    }
+    .add-group-actions { display: flex; gap: 8px; }
+
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(20,20,30,0.45); align-items: center; justify-content: center; z-index: 10; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: var(--paper); border-radius: 16px; padding: 24px; width: 90%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
+    .modal h3 { margin-top: 0; }
+    .modal .title-input {
+        width: 100%; font-size: 1.05em; font-weight: 700; padding: 10px 12px;
+        border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px;
+    }
+    .modal-buttons { margin-top: 18px; text-align: right; }
+    .modal-buttons button { margin-left: 8px; }
+</style>
+
+<script>
+const groupsData = JSON.parse(document.getElementById('groups-data').textContent);
+let currentEditGroupId = null;
+
+function findGroup(groupId) {
+    return groupsData.find(g => g.id === groupId);
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 공백만 있거나 특수문자/기호만 있는 입력은 키워드로 안 쳐준다 - 글자(한글 포함)나
+// 숫자가 하나라도 있어야 유효한 키워드로 취급한다.
+function isValidKeywordText(text) {
+    return /[\p{L}\p{N}]/u.test(text.trim());
+}
+
+// 모달이 열려 있는 동안 바뀐 키워드를, 뒤에 깔려 있는 마이페이지 목록에도
+// 그대로 반영한다 (제목은 이미 즉시 반영되고 있었는데 키워드만 새로고침해야
+// 보이던 문제를 고치기 위함).
+function syncMainKeywords(groupId) {
+    const group = findGroup(groupId);
+    const container = document.querySelector(`.group[data-group-id="${groupId}"] .keywords`);
+    container.innerHTML = group.keywords
+        .map(kw => `<span class="keyword">${escapeHtml(kw.text)}</span>`)
+        .join('');
+}
+
+function toggleAddForm() {
+    const form = document.getElementById('add-group-form');
+    const btn = document.getElementById('add-group-toggle');
+    const show = form.style.display !== 'block';
+    form.style.display = show ? 'block' : 'none';
+    btn.style.display = show ? 'none' : 'block';
+    if (show) document.getElementById('title').focus();
+}
+
+async function createGroup(e) {
+    e.preventDefault();
+    const title = document.getElementById('title').value;
+    const keywords = document.getElementById('keywords').value.split(',').map(s => s.trim()).filter(Boolean);
+    await fetch('/api/keyword-groups', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title, keywords})
+    });
+    location.reload();
+}
+
+async function deleteGroup(groupId) {
+    if (!confirm('이 키워드 그룹을 삭제하시겠습니까?')) return;
+    await fetch(`/api/keyword-groups/${groupId}`, {method: 'DELETE'});
+    alert('삭제되었습니다.');
+    location.reload();
+}
+
+// [수정] 버튼: 페이지 안에서 인라인으로 바꾸지 않고, 팝업을 띄워서 그 안에서만 편집한다.
+function openEditModal(groupId) {
+    currentEditGroupId = groupId;
+    const group = findGroup(groupId);
+    document.getElementById('modal-title-input').value = group.title;
+    renderModalKeywords(group.keywords);
+    document.getElementById('edit-modal-overlay').classList.add('open');
+}
+
+function closeEditModal() {
+    document.getElementById('edit-modal-overlay').classList.remove('open');
+    currentEditGroupId = null;
+}
+
+function renderModalKeywords(keywords) {
+    const container = document.getElementById('modal-keywords');
+    container.innerHTML = '';
+    keywords.forEach(kw => {
+        const span = document.createElement('span');
+        span.className = 'keyword';
+        span.innerHTML = `${escapeHtml(kw.text)}<span class="kw-x" onclick="deleteKeywordInModal(${kw.id})">✕</span>`;
+        container.appendChild(span);
+    });
+    const addBtn = document.createElement('span');
+    addBtn.className = 'kw-add';
+    addBtn.textContent = '+';
+    addBtn.onclick = startAddKeywordInModal;
+    container.appendChild(addBtn);
+}
+
+// [+] 클릭: 기존 키워드 칩과 똑같은 모양(둥근 회색 알약)의 칸으로 바뀌고, 그 안에
+// 텍스트 입력 + 체크(✓, 추가 확정) + x(입력 취소) 버튼이 들어간다. 체크가 x보다 왼쪽.
+function startAddKeywordInModal() {
+    const container = document.getElementById('modal-keywords');
+    const addBtn = container.querySelector('.kw-add');
+    const span = document.createElement('span');
+    span.className = 'keyword kw-input-chip';
+    span.innerHTML = `
+        <input type="text" onkeydown="if(event.key==='Enter') confirmAddKeywordInModal(this)">
+        <span class="kw-check" onclick="confirmAddKeywordInModal(this.previousElementSibling)">✓</span>
+        <span class="kw-x" onclick="cancelAddKeywordInModal()">✕</span>
+    `;
+    addBtn.replaceWith(span);
+    span.querySelector('input').focus();
+}
+
+function cancelAddKeywordInModal() {
+    renderModalKeywords(findGroup(currentEditGroupId).keywords);
+}
+
+async function confirmAddKeywordInModal(inputEl, { silent = false } = {}) {
+    const text = inputEl.value.trim();
+    if (!isValidKeywordText(text)) return;
+    const res = await fetch(`/api/keyword-groups/${currentEditGroupId}/keywords`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text})
+    });
+    const newKeyword = await res.json();
+    findGroup(currentEditGroupId).keywords.push(newKeyword);
+    if (!silent) alert('추가되었습니다.');
+    renderModalKeywords(findGroup(currentEditGroupId).keywords);
+    syncMainKeywords(currentEditGroupId);
+}
+
+async function deleteKeywordInModal(keywordId) {
+    if (!confirm('이 키워드를 삭제하시겠습니까?')) return;
+    await fetch(`/api/keywords/${keywordId}`, {method: 'DELETE'});
+    alert('삭제되었습니다.');
+    const group = findGroup(currentEditGroupId);
+    group.keywords = group.keywords.filter(k => k.id !== keywordId);
+    renderModalKeywords(group.keywords);
+    syncMainKeywords(currentEditGroupId);
+}
+
+// [저장] 버튼: 제목만 저장하는 게 아니라, 마침 입력 중이던(체크를 안 눌렀어도) 키워드가
+// 있고 그 내용이 유효하면 그것도 같이 추가해준다 - 매번 체크를 눌러야만 추가되면
+// 사용자가 깜빡하고 저장만 누르는 경우 입력한 게 그냥 사라져 버리기 때문.
+async function saveModal() {
+    const pendingInput = document.querySelector('#modal-keywords .kw-input-chip input');
+    if (pendingInput && isValidKeywordText(pendingInput.value)) {
+        await confirmAddKeywordInModal(pendingInput, { silent: true });
+    }
+
+    const newTitle = document.getElementById('modal-title-input').value;
+    await fetch(`/api/keyword-groups/${currentEditGroupId}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title: newTitle})
+    });
+    findGroup(currentEditGroupId).title = newTitle;
+    document.querySelector(`.group[data-group-id="${currentEditGroupId}"] .group-title`).textContent = newTitle;
+
+    closeEditModal();
+}
+</script>
+{% endblock %}
