@@ -8,36 +8,46 @@
 
 <div id="groups">
 {% for g in groups %}
-    <div class="group" data-group-id="{{ g.id }}">
-        <div class="group-main">
-            <h3 class="group-title">{{ g.title }}</h3>
-            <div class="keywords">
-                {% for kw in g.keywords %}<span class="keyword">{{ kw.text }}</span>{% endfor %}
+    <div class="group-row{% if not g.is_active %} inactive{% endif %}" data-group-id="{{ g.id }}">
+        <div class="group">
+            <div class="group-main">
+                <h3 class="group-title">{{ g.title }}</h3>
+                <div class="keywords">
+                    {% for kw in g.keywords %}<span class="keyword">{{ kw.text }}</span>{% endfor %}
+                </div>
+            </div>
+            <div class="group-icons">
+                <button class="icon-btn" title="수정" onclick="openEditModal({{ g.id }})">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17">
+                        <path d="M16.862 4.487a2.06 2.06 0 1 1 2.914 2.914L8.9 18.277l-4.243 1.06 1.061-4.242L16.862 4.487Z"/>
+                        <path d="M15.2 6.1 17.9 8.8"/>
+                    </svg>
+                </button>
+                <button class="icon-btn icon-btn-danger" title="삭제" onclick="deleteGroup({{ g.id }})">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17">
+                        <path d="M4 7h16"/>
+                        <path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/>
+                        <path d="M6 7l1 13.2A2 2 0 0 0 9 22h6a2 2 0 0 0 2-1.8L18 7"/>
+                        <path d="M10 11v6M14 11v6"/>
+                    </svg>
+                </button>
             </div>
         </div>
-        <div class="group-icons">
-            <button class="icon-btn" title="수정" onclick="openEditModal({{ g.id }})">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17">
-                    <path d="M16.862 4.487a2.06 2.06 0 1 1 2.914 2.914L8.9 18.277l-4.243 1.06 1.061-4.242L16.862 4.487Z"/>
-                    <path d="M15.2 6.1 17.9 8.8"/>
-                </svg>
-            </button>
-            <button class="icon-btn icon-btn-danger" title="삭제" onclick="deleteGroup({{ g.id }})">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17">
-                    <path d="M4 7h16"/>
-                    <path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/>
-                    <path d="M6 7l1 13.2A2 2 0 0 0 9 22h6a2 2 0 0 0 2-1.8L18 7"/>
-                    <path d="M10 11v6M14 11v6"/>
-                </svg>
-            </button>
-        </div>
+        <label class="switch group-switch" title="발송 켜기/끄기">
+            <input type="checkbox" {% if g.is_active %}checked{% endif %}
+                   onchange="toggleGroupActive({{ g.id }}, this.checked)">
+            <span class="switch-slider"></span>
+        </label>
     </div>
 {% else %}
     <p class="empty">아직 등록한 키워드 그룹이 없습니다.</p>
 {% endfor %}
 </div>
 
-<button class="add-group-btn" id="add-group-toggle" onclick="toggleAddForm()">+ 새 그룹 등록</button>
+<div class="add-group-row">
+    <button class="add-group-btn" id="add-group-toggle" onclick="toggleAddForm()">+ 새 그룹 등록</button>
+    <button class="add-group-btn" id="chat-trigger-btn" onclick="openChatModal()">🤖 나의 관심 키워드 찾기</button>
+</div>
 <form id="add-group-form" class="add-group-form" onsubmit="createGroup(event)">
     <input type="text" id="title" placeholder="그룹 제목 (예: LLM 추론 최적화)" required>
     <input type="text" id="keywords" placeholder="키워드를 쉼표로 구분해서 입력 (예: RAG, multi-agent)" required>
@@ -47,7 +57,8 @@
     </div>
 </form>
 
-<!-- 그룹 수정 팝업. 하나만 만들어두고, [수정] 누른 그룹에 맞춰 내용만 채워서 재사용한다. -->
+<!-- 그룹 수정 팝업. 하나만 만들어두고, [수정] 누른 그룹에 맞춰 내용만 채워서 재사용한다.
+     .modal-overlay/.modal/.keyword 등 공통 스타일은 _chat_modal.html에서 온다. -->
 <div id="edit-modal-overlay" class="modal-overlay" onclick="if (event.target === this) closeEditModal()">
     <div class="modal">
         <h3>키워드 그룹 수정</h3>
@@ -61,6 +72,8 @@
 </div>
 </div>
 
+{% include "_chat_modal.html" %}
+
 <!-- groups를 JS에서도 쓸 수 있도록 JSON으로 그대로 내려보낸다 (모달을 열 때마다
      서버에 다시 물어보지 않고, 이미 받은 데이터로 바로 채워 넣기 위함). -->
 <script id="groups-data" type="application/json">{{ groups_json | safe }}</script>
@@ -70,13 +83,36 @@
     .page-sub { color: var(--ink-soft); margin: 0 0 28px; font-size: 14px; }
     .empty { color: var(--ink-soft); font-size: 14px; }
 
+    /* group-row = 카드(.group) + 카드 밖 우측의 발송 on/off 스위치. 스위치를
+       카드 테두리 밖에 둬서 "이 그룹 자체를 편집하는 조작"(수정/삭제, 카드 안)과
+       "발송 대상 여부"(카드 밖)를 시각적으로 분리했다. */
+    .group-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .group-row.inactive .group { opacity: 0.5; }
+    .group-switch { flex-shrink: 0; }
+
     .group {
-        display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+        flex: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
         background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-        padding: 18px 20px; margin-bottom: 14px; box-shadow: var(--shadow);
+        padding: 18px 20px; box-shadow: var(--shadow);
+        transition: opacity .15s;
     }
     .group-title { margin: 0 0 10px; font-size: 16px; font-weight: 700; }
     .group-icons { display: flex; gap: 6px; flex-shrink: 0; }
+
+    .switch { position: relative; display: inline-block; width: 38px; height: 22px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch-slider {
+        position: absolute; inset: 0; cursor: pointer;
+        background-color: #d8d8dd; border-radius: 999px; transition: background-color .18s;
+    }
+    .switch-slider::before {
+        content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px;
+        background-color: #fff; border-radius: 50%; transition: transform .18s;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    }
+    .switch input:checked + .switch-slider { background-color: var(--kakao); }
+    .switch input:checked + .switch-slider::before { transform: translateX(16px); }
+
     .icon-btn {
         width: 34px; height: 34px; border-radius: 50%; border: none;
         background: var(--paper-soft); color: var(--ink-soft);
@@ -85,13 +121,6 @@
     }
     .icon-btn:hover { background: #ececf1; color: var(--ink); }
     .icon-btn-danger:hover { background: rgba(229, 72, 77, 0.12); color: var(--danger); }
-
-    .keyword { display: inline-flex; align-items: center; background: #f0f0f0; border-radius: 12px; padding: 2px 10px; margin: 2px 4px 2px 0; font-size: 13px; }
-    .kw-x, .kw-check { cursor: pointer; margin-left: 6px; color: #999; }
-    .kw-x:hover { color: #c00; }
-    .kw-check:hover { color: #1a7f37; }
-    .kw-add { display: inline-block; background: #f0f0f0; border-radius: 12px; padding: 2px 12px; margin: 2px; font-size: 13px; cursor: pointer; }
-    .kw-input-chip input { border: none; background: transparent; font-size: 13px; width: 90px; outline: none; }
 
     .add-group-btn {
         width: 100%; padding: 16px; border-radius: var(--radius);
@@ -112,23 +141,17 @@
     }
     .add-group-actions { display: flex; gap: 8px; }
 
-    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(20,20,30,0.45); align-items: center; justify-content: center; z-index: 10; }
-    .modal-overlay.open { display: flex; }
-    .modal { background: var(--paper); border-radius: 16px; padding: 24px; width: 90%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
-    .modal h3 { margin-top: 0; }
-    .modal .title-input {
-        width: 100%; font-size: 1.05em; font-weight: 700; padding: 10px 12px;
-        border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px;
-    }
-    .modal-buttons { margin-top: 18px; text-align: right; }
-    .modal-buttons button { margin-left: 8px; }
-
     .send-now-btn { display: block; width: 100%; margin-bottom: 24px; }
+
+    .add-group-row { display: flex; gap: 10px; }
+    .add-group-row .add-group-btn { flex: 1; }
 </style>
 
 <script>
 const groupsData = JSON.parse(document.getElementById('groups-data').textContent);
 let currentEditGroupId = null;
+const EDIT_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><path d="M16.862 4.487a2.06 2.06 0 1 1 2.914 2.914L8.9 18.277l-4.243 1.06 1.061-4.242L16.862 4.487Z"/><path d="M15.2 6.1 17.9 8.8"/></svg>`;
+const TRASH_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="17" height="17"><path d="M4 7h16"/><path d="M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/><path d="M6 7l1 13.2A2 2 0 0 0 9 22h6a2 2 0 0 0 2-1.8L18 7"/><path d="M10 11v6M14 11v6"/></svg>`;
 
 function findGroup(groupId) {
     return groupsData.find(g => g.id === groupId);
@@ -159,27 +182,27 @@ async function sendNow() {
     }
 }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// 공백만 있거나 특수문자/기호만 있는 입력은 키워드로 안 쳐준다 - 글자(한글 포함)나
-// 숫자가 하나라도 있어야 유효한 키워드로 취급한다.
-function isValidKeywordText(text) {
-    return /[\p{L}\p{N}]/u.test(text.trim());
-}
-
 // 모달이 열려 있는 동안 바뀐 키워드를, 뒤에 깔려 있는 마이페이지 목록에도
 // 그대로 반영한다 (제목은 이미 즉시 반영되고 있었는데 키워드만 새로고침해야
 // 보이던 문제를 고치기 위함).
 function syncMainKeywords(groupId) {
     const group = findGroup(groupId);
-    const container = document.querySelector(`.group[data-group-id="${groupId}"] .keywords`);
+    const container = document.querySelector(`.group-row[data-group-id="${groupId}"] .keywords`);
     container.innerHTML = group.keywords
         .map(kw => `<span class="keyword">${escapeHtml(kw.text)}</span>`)
         .join('');
+}
+
+// 그룹별 발송 on/off 스위치. 관심 키워드로 등록은 해뒀지만 오늘은 다른 그룹의
+// 논문만 받고 싶을 수 있어서, 그룹/키워드는 그대로 두고 발송 대상에서만 뺀다.
+async function toggleGroupActive(groupId, isActive) {
+    await fetch(`/api/keyword-groups/${groupId}/active`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: isActive })
+    });
+    findGroup(groupId).is_active = isActive;
+    document.querySelector(`.group-row[data-group-id="${groupId}"]`).classList.toggle('inactive', !isActive);
 }
 
 function toggleAddForm() {
@@ -301,9 +324,48 @@ async function saveModal() {
         body: JSON.stringify({title: newTitle})
     });
     findGroup(currentEditGroupId).title = newTitle;
-    document.querySelector(`.group[data-group-id="${currentEditGroupId}"] .group-title`).textContent = newTitle;
+    document.querySelector(`.group-row[data-group-id="${currentEditGroupId}"] .group-title`).textContent = newTitle;
 
     closeEditModal();
+}
+
+// 채팅(_chat_modal.html)으로 그룹이 등록되면 이 훅이 불린다 - 마이페이지에서는
+// 새로고침 없이 목록 맨 위에 바로 끼워 넣는다 (새로고침하면 대화 모달이 같이
+// 닫혀버려서 안 됨).
+function onGroupRegistered(group) {
+    appendNewGroupToMainList(group);
+}
+
+function appendNewGroupToMainList(group) {
+    groupsData.unshift(group);
+
+    const groupsContainer = document.getElementById('groups');
+    const emptyMsg = groupsContainer.querySelector('.empty');
+    if (emptyMsg) emptyMsg.remove();
+
+    const keywordsHtml = group.keywords.map(kw => `<span class="keyword">${escapeHtml(kw.text)}</span>`).join('');
+    const isActive = group.is_active !== false;
+    const row = document.createElement('div');
+    row.className = isActive ? 'group-row' : 'group-row inactive';
+    row.dataset.groupId = group.id;
+    row.innerHTML = `
+        <div class="group">
+            <div class="group-main">
+                <h3 class="group-title">${escapeHtml(group.title)}</h3>
+                <div class="keywords">${keywordsHtml}</div>
+            </div>
+            <div class="group-icons">
+                <button class="icon-btn" title="수정" onclick="openEditModal(${group.id})">${EDIT_ICON_SVG}</button>
+                <button class="icon-btn icon-btn-danger" title="삭제" onclick="deleteGroup(${group.id})">${TRASH_ICON_SVG}</button>
+            </div>
+        </div>
+        <label class="switch group-switch" title="발송 켜기/끄기">
+            <input type="checkbox" ${isActive ? 'checked' : ''}
+                   onchange="toggleGroupActive(${group.id}, this.checked)">
+            <span class="switch-slider"></span>
+        </label>
+    `;
+    groupsContainer.prepend(row);
 }
 </script>
 {% endblock %}

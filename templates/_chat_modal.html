@@ -1,0 +1,303 @@
+<!-- LLM 대화형 키워드 찾기 팝업 + 등록 확인 팝업. index.html(홈 화면 팝업)과
+     mypage.html(마이페이지) 양쪽에서 include해서 재사용한다. 대화 기록은 서버에
+     저장하지 않고(무상태 API), chatHistory 배열에만 들고 있다가 매 턴 전체를
+     서버로 보낸다. 등록이 끝나면 각 페이지가 정의한 onGroupRegistered(group)
+     훅을 호출해서 "등록 후 무엇을 할지"만 페이지별로 다르게 처리한다
+     (마이페이지: 목록에 바로 추가 / 홈: 완료 안내만). -->
+<div id="chat-modal-overlay" class="modal-overlay" onclick="if (event.target === this) closeChatModal()">
+    <div class="modal chat-modal">
+        <div class="chat-header">
+            <h3>나의 관심 키워드 찾기</h3>
+            <button class="btn btn-outline" onclick="closeChatModal()">닫기</button>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div class="chat-input-row">
+            <input type="text" id="chat-input" placeholder="메시지를 입력하세요"
+                   onkeydown="if(event.key==='Enter') sendChatMessage()">
+            <button class="btn btn-kakao" id="chat-send-btn" onclick="sendChatMessage()">전송</button>
+        </div>
+    </div>
+</div>
+
+<div id="chat-confirm-overlay" class="modal-overlay" onclick="if (event.target === this) closeProposalConfirm()">
+    <div class="modal">
+        <h3>키워드 그룹 등록</h3>
+        <input type="text" id="confirm-title-input" class="title-input">
+        <div id="confirm-keywords" class="keywords"></div>
+        <div class="modal-buttons">
+            <button class="btn btn-outline" onclick="closeProposalConfirm()">취소</button>
+            <button class="btn btn-kakao" onclick="confirmRegisterProposal()">등록</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(20,20,30,0.45); align-items: center; justify-content: center; z-index: 10; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: var(--paper); border-radius: 16px; padding: 24px; width: 90%; max-width: 480px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
+    .modal h3 { margin-top: 0; }
+    .modal .title-input {
+        width: 100%; font-size: 1.05em; font-weight: 700; padding: 10px 12px;
+        border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px;
+    }
+    .modal-buttons { margin-top: 18px; text-align: right; }
+    .modal-buttons button { margin-left: 8px; }
+
+    .keyword { display: inline-flex; align-items: center; background: #f0f0f0; border-radius: 12px; padding: 2px 10px; margin: 2px 4px 2px 0; font-size: 13px; }
+    .kw-x, .kw-check { cursor: pointer; margin-left: 6px; color: #999; }
+    .kw-x:hover { color: #c00; }
+    .kw-check:hover { color: #1a7f37; }
+    .kw-add { display: inline-block; background: #f0f0f0; border-radius: 12px; padding: 2px 12px; margin: 2px; font-size: 13px; cursor: pointer; }
+    .kw-input-chip input { border: none; background: transparent; font-size: 13px; width: 90px; outline: none; }
+
+    .chat-modal { max-width: 520px; display: flex; flex-direction: column; height: 70vh; }
+    .chat-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .chat-header h3 { margin: 0; }
+    .chat-messages { flex: 1; overflow-y: auto; padding: 4px 4px 12px; display: flex; flex-direction: column; gap: 10px; }
+    .chat-bubble { max-width: 80%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+    .chat-assistant { align-self: flex-start; background: var(--paper-soft); border-bottom-left-radius: 4px; }
+    .chat-user { align-self: flex-end; background: var(--kakao); color: #191919; border-bottom-right-radius: 4px; }
+    .chat-input-row { display: flex; gap: 8px; margin-top: 8px; }
+    .chat-input-row input {
+        flex: 1; padding: 11px 14px; border: 1px solid var(--border);
+        border-radius: 10px; font-size: 14px;
+    }
+
+    .proposal-card {
+        align-self: stretch; background: var(--paper); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 16px; position: relative;
+    }
+    .proposal-hint { margin: 0 0 8px; font-size: 13px; color: var(--ink-soft); }
+    .proposal-title { font-weight: 700; margin-bottom: 10px; }
+    .proposal-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+    .chip {
+        display: inline-block; padding: 5px 12px; border-radius: 14px; font-size: 13px;
+        border: 1.5px solid var(--border); background: var(--paper); cursor: pointer;
+        transition: background .12s, border-color .12s, color .12s;
+    }
+    .chip.selected { background: var(--kakao); border-color: var(--kakao); color: #191919; font-weight: 600; }
+    .proposal-actions { display: flex; gap: 8px; }
+    .proposal-actions button {
+        border: 1px solid var(--border); background: var(--paper-soft); border-radius: 8px;
+        padding: 7px 14px; font-size: 13px; cursor: pointer;
+    }
+    .proposal-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .proposal-card.dismissed { opacity: 0.45; pointer-events: none; }
+    .proposal-card.registered { opacity: 0.85; }
+    .proposal-card.registered .chip { pointer-events: none; }
+    .proposal-badge {
+        margin-top: 10px; display: inline-block; font-size: 12px; font-weight: 700;
+        color: #1a7f37; background: rgba(26,127,55,0.1); padding: 3px 10px; border-radius: 8px;
+    }
+</style>
+
+<script>
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 공백만 있거나 특수문자/기호만 있는 입력은 키워드로 안 쳐준다.
+function isValidKeywordText(text) {
+    return /[\p{L}\p{N}]/u.test(text.trim());
+}
+
+const CHAT_GREETING = 'AI에 관하여 어떤 내용들에 관심이 있으신가요? 관심 키워드를 함께 찾아보아요.';
+
+let chatHistory = [];  // [{role: 'user'|'assistant', content: string}, ...] - 서버는 무상태라 매번 이걸 통째로 보낸다.
+let activeProposalCardEl = null;  // 등록도 dismiss도 안 된, 지금 활성 상태인 제안 카드
+let pendingCardEl = null;  // 지금 등록 확인 팝업이 다루고 있는 카드
+let pendingSelectedKeywords = [];  // 등록 확인 팝업에서 편집 중인 키워드 (아직 서버에 반영 안 됨)
+
+function openChatModal() {
+    chatHistory = [{ role: 'assistant', content: CHAT_GREETING }];
+    activeProposalCardEl = null;
+    document.getElementById('chat-messages').innerHTML = '';
+    appendChatBubble('assistant', CHAT_GREETING);
+    document.getElementById('chat-modal-overlay').classList.add('open');
+    document.getElementById('chat-input').focus();
+}
+
+function closeChatModal() {
+    document.getElementById('chat-modal-overlay').classList.remove('open');
+}
+
+function appendChatBubble(role, text) {
+    const messages = document.getElementById('chat-messages');
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble chat-${role}`;
+    bubble.textContent = text;
+    messages.appendChild(bubble);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+// 사용자가 아무것도 선택 안 하고 다음 메시지를 보내면, 직전 활성 카드는
+// 자동으로 흐리게 처리하고 비활성화한다 (CLAUDE.md 2-4 스펙).
+function dismissActiveCardIfAny() {
+    if (!activeProposalCardEl) return;
+    activeProposalCardEl.classList.add('dismissed');
+    activeProposalCardEl.querySelectorAll('button').forEach(b => b.disabled = true);
+    activeProposalCardEl = null;
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const text = input.value.trim();
+    if (!text) return;
+
+    dismissActiveCardIfAny();
+    appendChatBubble('user', text);
+    chatHistory.push({ role: 'user', content: text });
+    input.value = '';
+
+    const sendBtn = document.getElementById('chat-send-btn');
+    sendBtn.disabled = true;
+    try {
+        const res = await fetch('/api/keyword-chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ history: chatHistory })
+        });
+        const result = await res.json();
+
+        if (result.reply) appendChatBubble('assistant', result.reply);
+        chatHistory.push({ role: 'assistant', content: result.reply || '' });
+
+        if (result.proposal) renderProposalCard(result.proposal);
+    } catch (e) {
+        appendChatBubble('assistant', '죄송해요, 오류가 발생했어요. 다시 시도해주세요.');
+    } finally {
+        sendBtn.disabled = false;
+    }
+}
+
+function renderProposalCard(proposal) {
+    const messages = document.getElementById('chat-messages');
+    const card = document.createElement('div');
+    card.className = 'proposal-card';
+    card.dataset.title = proposal.title;
+
+    const chipsHtml = proposal.keywords
+        .map(kw => `<span class="chip" onclick="toggleChip(this)">${escapeHtml(kw)}</span>`)
+        .join('');
+    card.innerHTML = `
+        <p class="proposal-hint">마음에 드신다면 관심 키워드로 등록할 수 있습니다!</p>
+        <div class="proposal-title">${escapeHtml(proposal.title)}</div>
+        <div class="proposal-chips">${chipsHtml}</div>
+        <div class="proposal-actions">
+            <button type="button" onclick="selectAllChips(this)">전체 선택</button>
+            <button type="button" class="select-confirm-btn" disabled onclick="openProposalConfirm(this)">선택</button>
+        </div>
+    `;
+    messages.appendChild(card);
+    messages.scrollTop = messages.scrollHeight;
+    activeProposalCardEl = card;
+}
+
+function toggleChip(chipEl) {
+    const card = chipEl.closest('.proposal-card');
+    if (card.classList.contains('registered') || card.classList.contains('dismissed')) return;
+    chipEl.classList.toggle('selected');
+    card.querySelector('.select-confirm-btn').disabled = card.querySelectorAll('.chip.selected').length === 0;
+}
+
+function selectAllChips(btnEl) {
+    const card = btnEl.closest('.proposal-card');
+    card.querySelectorAll('.chip').forEach(c => c.classList.add('selected'));
+    card.querySelector('.select-confirm-btn').disabled = false;
+}
+
+// [선택] 클릭 -> 등록 전 마지막 확인 팝업. 여기서 제목/키워드를 더 손볼 수 있다.
+function openProposalConfirm(btnEl) {
+    pendingCardEl = btnEl.closest('.proposal-card');
+    pendingSelectedKeywords = [...pendingCardEl.querySelectorAll('.chip.selected')].map(c => c.textContent);
+
+    document.getElementById('confirm-title-input').value = pendingCardEl.dataset.title;
+    renderConfirmKeywords();
+    document.getElementById('chat-confirm-overlay').classList.add('open');
+}
+
+function closeProposalConfirm() {
+    document.getElementById('chat-confirm-overlay').classList.remove('open');
+    pendingCardEl = null;
+}
+
+// 등록 확인 팝업 안의 키워드 목록도 마이페이지 편집 팝업과 똑같은 x-삭제/+-추가
+// 패턴을 쓴다 - 다만 여기 있는 동안은 로컬 배열(pendingSelectedKeywords)만 바뀌고
+// [등록]을 누르기 전까지는 서버에 아무 것도 반영되지 않는다.
+function renderConfirmKeywords() {
+    const container = document.getElementById('confirm-keywords');
+    container.innerHTML = '';
+    pendingSelectedKeywords.forEach((kw, idx) => {
+        const span = document.createElement('span');
+        span.className = 'keyword';
+        span.innerHTML = `${escapeHtml(kw)}<span class="kw-x" onclick="removePendingKeyword(${idx})">✕</span>`;
+        container.appendChild(span);
+    });
+    const addBtn = document.createElement('span');
+    addBtn.className = 'kw-add';
+    addBtn.textContent = '+';
+    addBtn.onclick = startAddPendingKeyword;
+    container.appendChild(addBtn);
+}
+
+function removePendingKeyword(idx) {
+    if (!confirm('이 키워드를 삭제하시겠습니까?')) return;
+    pendingSelectedKeywords.splice(idx, 1);
+    renderConfirmKeywords();
+}
+
+function startAddPendingKeyword() {
+    const container = document.getElementById('confirm-keywords');
+    const addBtn = container.querySelector('.kw-add');
+    const span = document.createElement('span');
+    span.className = 'keyword kw-input-chip';
+    span.innerHTML = `
+        <input type="text" onkeydown="if(event.key==='Enter') confirmAddPendingKeyword(this)">
+        <span class="kw-check" onclick="confirmAddPendingKeyword(this.previousElementSibling)">✓</span>
+        <span class="kw-x" onclick="renderConfirmKeywords()">✕</span>
+    `;
+    addBtn.replaceWith(span);
+    span.querySelector('input').focus();
+}
+
+function confirmAddPendingKeyword(inputEl) {
+    const text = inputEl.value.trim();
+    if (!isValidKeywordText(text)) return;
+    pendingSelectedKeywords.push(text);
+    renderConfirmKeywords();
+}
+
+// 등록이 끝나면(POST 성공) 페이지별로 정의된 onGroupRegistered(newGroup) 훅을
+// 불러서 "등록 후 화면을 어떻게 바꿀지"만 페이지마다 다르게 처리한다.
+async function confirmRegisterProposal() {
+    if (pendingSelectedKeywords.length === 0) {
+        alert('키워드를 하나 이상 선택해주세요.');
+        return;
+    }
+    const pendingInput = document.querySelector('#confirm-keywords .kw-input-chip input');
+    if (pendingInput && isValidKeywordText(pendingInput.value)) {
+        pendingSelectedKeywords.push(pendingInput.value.trim());
+    }
+
+    const title = document.getElementById('confirm-title-input').value;
+    const res = await fetch('/api/keyword-groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, keywords: pendingSelectedKeywords, source: 'llm_chat' })
+    });
+    const newGroup = await res.json();
+
+    pendingCardEl.classList.add('registered');
+    pendingCardEl.querySelectorAll('button').forEach(b => b.disabled = true);
+    const badge = document.createElement('div');
+    badge.className = 'proposal-badge';
+    badge.textContent = '✓ 등록됨';
+    pendingCardEl.appendChild(badge);
+    if (activeProposalCardEl === pendingCardEl) activeProposalCardEl = null;
+
+    closeProposalConfirm();
+    onGroupRegistered(newGroup);
+}
+</script>

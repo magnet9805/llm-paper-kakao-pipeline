@@ -18,7 +18,10 @@
             <p class="eyebrow">관심 논문 알리미</p>
             <h1>안녕하세요,<br>{{ user.nickname }}님</h1>
             <p class="lede">오늘도 관심 키워드에 맞는 논문을 카카오톡으로 받아보세요.</p>
-            <a class="btn btn-kakao" href="/mypage">마이페이지로 이동</a>
+            <div class="hero-actions">
+                <button type="button" class="btn btn-kakao" onclick="openManualModal()">관심 키워드 등록</button>
+                <button type="button" class="btn btn-ai" onclick="openChatModal()">🤖 AI 기반 관심 키워드 찾기</button>
+            </div>
         {% else %}
             <p class="eyebrow">AI 논문 큐레이션 · 카카오톡 알림</p>
             <h1>관심 논문,<br>카카오톡으로 받아보세요</h1>
@@ -27,6 +30,11 @@
         {% endif %}
     </div>
 </div>
+
+{% if user %}
+    {% include "_chat_modal.html" %}
+    {% include "_manual_modal.html" %}
+{% endif %}
 
 <style>
     body.page-hero { margin: 0; }
@@ -61,6 +69,15 @@
         font-size: 17px; color: rgba(255, 255, 255, 0.78); margin: 0 0 34px; line-height: 1.6;
     }
 
+    .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    /* 히어로의 보라색 라디얼 그라디언트(rgba(120,95,190,...))와 어울리는 톤으로,
+       카카오 노란 버튼과 나란히 있어도 "AI 기능"임이 시각적으로 구분되게 한다. */
+    .btn-ai {
+        background: linear-gradient(135deg, #8b7cf6 0%, #6c5ce7 100%);
+        color: #fff; box-shadow: 0 6px 18px rgba(108, 92, 231, 0.45);
+    }
+    .btn-ai:hover { box-shadow: 0 8px 22px rgba(108, 92, 231, 0.55); }
+
     .hero-icon {
         position: absolute; z-index: 0;
         width: 480px; max-width: 60vw;
@@ -74,4 +91,14 @@
         .hero-icon { opacity: 0.35; right: -40px; bottom: -30px; }
     }
 </style>
+
+{% if user %}
+<script>
+    // 홈 화면에는 관리할 그룹 목록이 없으니, 등록 후에는 완료 안내만 띄운다
+    // (그룹 목록에 바로 반영하는 건 마이페이지에서만 의미가 있다).
+    function onGroupRegistered(group) {
+        alert(`"${group.title}" 키워드 그룹이 등록되었습니다! 마이페이지에서 확인할 수 있어요.`);
+    }
+</script>
+{% endif %}
 {% endblock %}

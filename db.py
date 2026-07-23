@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS keyword_groups (
     user_id INTEGER NOT NULL REFERENCES users(id),
     title TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN ('manual', 'llm_chat')),
+    is_active INTEGER NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -65,6 +66,18 @@ def get_connection():
 def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    CREATE TABLE IF NOT EXISTS는 이미 만들어진 테이블에 새 컬럼을 추가해주지 않는다.
+    is_active 컬럼(그룹별 발송 on/off) 도입 이전에 만들어진 기존 app.db를 위한
+    1회성 보정 - 이미 컬럼이 있으면 아무 것도 하지 않는다.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(keyword_groups)").fetchall()}
+    if "is_active" not in columns:
+        conn.execute("ALTER TABLE keyword_groups ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
 
 
 def upsert_user(
@@ -131,7 +144,13 @@ def create_keyword_group(
             )
             saved_keywords.append({"id": kw_cursor.lastrowid, "text": kw})
 
-    return {"id": group_id, "title": title, "source": source, "keywords": saved_keywords}
+    return {
+        "id": group_id,
+        "title": title,
+        "source": source,
+        "is_active": True,
+        "keywords": saved_keywords,
+    }
 
 
 def list_keyword_groups(user_id: int) -> list[dict]:
@@ -142,7 +161,7 @@ def list_keyword_groups(user_id: int) -> list[dict]:
     """
     with get_connection() as conn:
         groups = conn.execute(
-            "SELECT id, title, source, created_at FROM keyword_groups "
+            "SELECT id, title, source, is_active, created_at FROM keyword_groups "
             "WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
@@ -157,6 +176,7 @@ def list_keyword_groups(user_id: int) -> list[dict]:
                     "id": group["id"],
                     "title": group["title"],
                     "source": group["source"],
+                    "is_active": bool(group["is_active"]),
                     "created_at": group["created_at"],
                     "keywords": [
                         {"id": row["id"], "text": row["keyword_text"]} for row in keyword_rows
@@ -164,6 +184,20 @@ def list_keyword_groups(user_id: int) -> list[dict]:
                 }
             )
         return result
+
+
+def set_keyword_group_active(user_id: int, group_id: int, is_active: bool) -> bool:
+    """
+    그룹별 발송 on/off. 키워드로 등록은 해뒀지만 오늘은 다른 관심 그룹의 논문만
+    받고 싶은 경우를 위한 기능 - 꺼둔 그룹은 /api/send-now의 클러스터 구성에서
+    제외된다 (그룹/키워드 자체는 그대로 남아있고, 발송 대상에서만 빠진다).
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE keyword_groups SET is_active = ? WHERE id = ? AND user_id = ?",
+            (1 if is_active else 0, group_id, user_id),
+        )
+        return cursor.rowcount > 0
 
 
 def update_keyword_group_title(user_id: int, group_id: int, title: str) -> bool:
