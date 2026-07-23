@@ -20,17 +20,22 @@ from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import RedirectResponse
 
+from collector import collect_papers
 from db import (
     add_keyword,
     create_keyword_group,
     delete_keyword,
     delete_keyword_group,
+    get_sent_paper_ids,
     get_user,
     init_db,
     list_keyword_groups,
+    mark_papers_sent,
     update_keyword_group_title,
     upsert_user,
 )
+from kakao_sender import refresh_user_access_token, send_papers
+from summarizer import summarize_papers
 
 load_dotenv()
 
@@ -275,3 +280,57 @@ async def delete_keyword_endpoint(keyword_id: int, user_id: int = Depends(requir
     if not deleted:
         raise HTTPException(status_code=404, detail="키워드를 찾을 수 없습니다.")
     return {"ok": True}
+
+
+TOP_N_CANDIDATES = 30  # HF Daily Papers에서 볼 상위 후보 개수 (main.py와 동일한 값)
+PAPERS_PER_SEND = 3  # 한 번에 보낼 논문 개수
+
+
+def _clusters_from_keyword_groups(groups: list[dict]) -> dict[str, list[str]]:
+    """
+    DB의 키워드 그룹들을 collector.collect_papers()가 이해하는 "클러스터" 형태로
+    바꾼다. 그룹 하나 = 클러스터 하나로 취급하고(그룹 제목을 그대로 클러스터 이름으로
+    씀), 그룹 내 키워드는 collector.py의 기존 방식대로 OR 매칭(하나만 걸려도 통과)
+    되게 소문자 리스트로 넘긴다. 여러 그룹(클러스터)에 걸리는 논문일수록
+    collect_papers 내부 로직이 알아서 우선순위를 준다.
+    """
+    return {
+        g["title"]: [kw["text"].lower() for kw in g["keywords"]]
+        for g in groups
+        if g["keywords"]
+    }
+
+
+@app.post("/api/send-now")
+async def send_now_endpoint(user_id: int = Depends(require_login)):
+    """
+    지금 이 사용자의 관심 키워드에 맞는 논문을 수집 -> 요약 -> 카카오톡 발송까지
+    수동으로 한 번에 트리거하는 API (마이페이지의 "지금 보내기" 버튼에서 호출).
+
+    main.py(개인용 스크립트)와 같은 collector/summarizer/kakao_sender를 그대로
+    재사용하되, 클러스터는 이 사용자가 등록한 키워드 그룹으로, 카카오 토큰은
+    이 사용자의 DB 레코드로, 중복 방지는 이 사용자의 발송 이력(sent_papers)으로
+    바꿔치기한 것 - "사용자별 키워드로 파라미터화"의 핵심이 이 함수다.
+
+    자동 스케줄링(매일 정해진 시각에 알아서 실행)은 아직 없다 - 로드맵 7번
+    (AWS EventBridge)에서 붙일 예정이고, 그때까지는 이 API를 직접 호출해야 한다.
+    """
+    user = get_user(user_id)
+    groups = list_keyword_groups(user_id)
+    clusters = _clusters_from_keyword_groups(groups)
+    if not clusters:
+        raise HTTPException(status_code=400, detail="등록된 관심 키워드가 없습니다.")
+
+    seen_ids = get_sent_paper_ids(user_id)
+    candidates = collect_papers(top_n=TOP_N_CANDIDATES, clusters=clusters, seen_ids=seen_ids)
+    selected = candidates[:PAPERS_PER_SEND]
+
+    if not selected:
+        return {"sent": 0, "papers": []}
+
+    summarized = summarize_papers(selected)
+    access_token = refresh_user_access_token(user)
+    send_papers(summarized, access_token)
+    mark_papers_sent(user_id, [p["hf_id"] for p in selected])
+
+    return {"sent": len(selected), "papers": [p["title"] for p in selected]}

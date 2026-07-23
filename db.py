@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS keywords (
     group_id INTEGER NOT NULL REFERENCES keyword_groups(id) ON DELETE CASCADE,
     keyword_text TEXT NOT NULL
 );
+
+-- 사용자마다 "이미 보낸 논문"이 달라야 하므로(개인용 스크립트의 전역 seen_papers.json과
+-- 달리) 사용자별로 발송 이력을 남긴다. UNIQUE(user_id, hf_id)로 같은 논문을 같은
+-- 사용자에게 중복 저장하는 걸 막는다.
+CREATE TABLE IF NOT EXISTS sent_papers (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    hf_id TEXT NOT NULL,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, hf_id)
+);
 """
 
 
@@ -213,3 +224,39 @@ def delete_keyword(user_id: int, keyword_id: int) -> bool:
             (keyword_id, user_id),
         )
         return cursor.rowcount > 0
+
+
+def update_kakao_tokens(
+    user_id: int, access_token: str, refresh_token: str, expires_at: datetime
+) -> None:
+    """
+    카카오 access_token을 갱신한 뒤 DB에 반영한다 (kakao_sender.refresh_user_access_token
+    에서 호출). 개인용 스크립트가 kakao_token.json 파일에 쓰는 것의 웹 서비스판.
+    """
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET kakao_access_token = ?, kakao_refresh_token = ?, kakao_token_expires_at = ?
+            WHERE id = ?
+            """,
+            (access_token, refresh_token, expires_at, user_id),
+        )
+
+
+def get_sent_paper_ids(user_id: int) -> set:
+    """이 사용자에게 이미 보낸 논문의 hf_id 집합. collector.collect_papers(seen_ids=...)에 넘긴다."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT hf_id FROM sent_papers WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        return {row["hf_id"] for row in rows}
+
+
+def mark_papers_sent(user_id: int, hf_ids: list[str]) -> None:
+    """방금 발송한 논문들을 이 사용자의 발송 이력에 기록해서 다음에 중복 발송되지 않게 한다."""
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO sent_papers (user_id, hf_id) VALUES (?, ?)",
+            [(user_id, hf_id) for hf_id in hf_ids],
+        )

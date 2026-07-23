@@ -4,6 +4,8 @@
 <h1 class="page-title">마이페이지</h1>
 <p class="page-sub">{{ user.nickname }}님의 관심 키워드 그룹</p>
 
+<button class="btn btn-outline send-now-btn" id="send-now-btn" onclick="sendNow()">지금 논문 받아보기</button>
+
 <div id="groups">
 {% for g in groups %}
     <div class="group" data-group-id="{{ g.id }}">
@@ -120,6 +122,8 @@
     }
     .modal-buttons { margin-top: 18px; text-align: right; }
     .modal-buttons button { margin-left: 8px; }
+
+    .send-now-btn { display: block; width: 100%; margin-bottom: 24px; }
 </style>
 
 <script>
@@ -128,6 +132,31 @@ let currentEditGroupId = null;
 
 function findGroup(groupId) {
     return groupsData.find(g => g.id === groupId);
+}
+
+// "지금 논문 받아보기" 버튼: 수집 -> 요약 -> 카카오 발송을 지금 바로 한 번 트리거한다.
+// Gemini/카카오 API를 실제로 호출하느라 몇 초 걸릴 수 있어서, 처리 중엔 버튼을
+// 비활성화하고 문구를 바꿔 중복 클릭을 막는다.
+async function sendNow() {
+    const btn = document.getElementById('send-now-btn');
+    btn.disabled = true;
+    btn.textContent = '보내는 중...';
+    try {
+        const res = await fetch('/api/send-now', { method: 'POST' });
+        const result = await res.json();
+        if (!res.ok) {
+            alert(result.detail || '발송에 실패했습니다.');
+            return;
+        }
+        if (result.sent === 0) {
+            alert('새로 보낼 논문이 없습니다 (이미 다 받아보셨거나, 조건에 맞는 논문이 없어요).');
+        } else {
+            alert(`${result.sent}편을 카카오톡으로 보냈습니다:\n- ${result.papers.join('\n- ')}`);
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '지금 논문 받아보기';
+    }
 }
 
 function escapeHtml(text) {

@@ -136,14 +136,19 @@ def _matches_cluster(text: str, cluster_def) -> bool:
     return any(kw in text for kw in cluster_def)
 
 
-def filter_by_keywords(papers: list[dict], clusters: dict = None) -> list[dict]:
+def filter_by_keywords(papers: list[dict], clusters: dict = None, seen_ids: set = None) -> list[dict]:
     """
     논문 리스트를 관심 키워드 클러스터로 필터링한다.
     통과한 논문에는 어떤 클러스터에 매칭됐는지 'matched_clusters' 필드를 추가한다
     (여러 클러스터에 걸릴수록 이후 랭킹에서 우선순위를 줄 수 있음).
+
+    seen_ids를 안 넘기면(None) 개인용 스크립트(main.py) 기준으로 seen_papers.json
+    파일을 읽는다. 웹 서비스(멀티유저)에서는 사용자마다 "이미 보낸 논문"이 다르므로,
+    호출하는 쪽(server.py)에서 그 사용자의 발송 이력을 DB에서 조회해 넘겨줘야 한다.
     """
     clusters = clusters or KEYWORD_CLUSTERS
-    seen_ids = _load_seen_ids()
+    if seen_ids is None:
+        seen_ids = _load_seen_ids()
     matched = []
 
     for paper in papers:
@@ -162,10 +167,12 @@ def filter_by_keywords(papers: list[dict], clusters: dict = None) -> list[dict]:
     return matched
 
 
-def collect_papers(target_date: str = None, top_n: int = 30) -> list[dict]:
+def collect_papers(
+    target_date: str = None, top_n: int = 30, clusters: dict = None, seen_ids: set = None
+) -> list[dict]:
     """수집 + 필터링을 한 번에 수행하는 진입점."""
     top_papers = fetch_top_daily_papers(target_date=target_date, top_n=top_n)
-    return filter_by_keywords(top_papers)
+    return filter_by_keywords(top_papers, clusters=clusters, seen_ids=seen_ids)
 
 
 def mark_as_seen(papers: list[dict]) -> None:

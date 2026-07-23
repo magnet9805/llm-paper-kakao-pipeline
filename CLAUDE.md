@@ -51,7 +51,9 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
    - [x] 2-1. 카카오 소셜 로그인 (Authlib) - 회원가입/로그인 통합 (server.py, db.py)
    - [x] 2-2. 관심 키워드 "직접 입력" 플로우 (그룹 생성/수정/삭제 + 키워드 추가/삭제 API +
      마이페이지 조회/편집 UI) (`/api/keyword-groups` 전체 CRUD, `templates/` 프론트엔드 포함)
-   - 2-3. 기존 collector.py를 사용자별 키워드로 파라미터화해서 카카오 발송까지 연결
+   - [x] 2-3. 기존 collector.py를 사용자별 키워드로 파라미터화해서 카카오 발송까지 연결
+     (`POST /api/send-now` 수동 트리거, `sent_papers` 테이블로 사용자별 중복 방지,
+     DB의 사용자별 kakao 토큰으로 발송 - 자동 스케줄링은 로드맵 7번에서 붙일 예정)
    - 2-4. LLM 대화형 키워드 추출 (아래 스펙대로 구현)
 3. [ ] Docker 컨테이너화
 4. [ ] 논문 검색/조회 로직을 MCP 서버로 분리
@@ -149,6 +151,16 @@ CREATE TABLE keywords (
     group_id INTEGER NOT NULL REFERENCES keyword_groups(id) ON DELETE CASCADE,
     keyword_text TEXT NOT NULL
 );
+
+-- 개인용 스크립트의 전역 seen_papers.json과 달리, 사용자마다 "이미 보낸 논문"이
+-- 달라야 해서 사용자별로 발송 이력을 남긴다.
+CREATE TABLE sent_papers (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    hf_id TEXT NOT NULL,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, hf_id)
+);
 ```
 
 > SQLite는 `ON DELETE CASCADE`를 기본적으로 무시한다 - 연결마다 `PRAGMA foreign_keys = ON`을
@@ -165,6 +177,26 @@ DELETE /api/keywords/{keyword_id}                  # 키워드 하나 삭제
 ```
 모든 엔드포인트는 `require_login` 의존성으로 로그인을 요구하고, 그룹/키워드가 요청한
 사용자 소유인지 SQL의 `WHERE user_id = ?` 절로 확인한다 (남의 그룹 id를 넣어도 404).
+
+## 사용자별 논문 발송 (구현 완료, `POST /api/send-now`)
+
+개인용 스크립트(`main.py`)의 collector/summarizer/kakao_sender를 그대로 재사용하되,
+"사용자별로 다른 부분"만 바꿔치기하는 방식으로 연결했다:
+
+| 개인용 스크립트 (main.py)              | 웹 서비스 (server.py의 send-now)                     |
+|----------------------------------------|-------------------------------------------------------|
+| `.env`의 고정 `KEYWORD_CLUSTERS`       | 이 사용자의 `list_keyword_groups()` 결과로 만든 클러스터 (그룹 1개 = 클러스터 1개, 그룹 제목이 곧 클러스터 이름) |
+| `seen_papers.json` (전역 파일)         | `sent_papers` 테이블 (사용자별 발송 이력)             |
+| `kakao_token.json` (전역 파일)         | `users` 테이블의 이 사용자 kakao 토큰 컬럼            |
+
+이 매핑 덕분에 `collector.py`/`kakao_sender.py`는 각각 `clusters`/`seen_ids`,
+`access_token`을 인자로 받는 형태로만 살짝 파라미터화됐고, 실제 수집/필터링/요약/
+발송 로직 자체는 손대지 않았다. `kakao_sender.py`에는 파일 기반 경로
+(`_refresh_access_token`, `send_daily_papers` - main.py용)와 DB 기반 경로
+(`refresh_user_access_token`, `send_papers` - server.py용)가 공존한다.
+
+지금은 마이페이지의 "지금 논문 받아보기" 버튼으로 수동 트리거해야 한다. 매일 자동
+실행되는 스케줄링은 로드맵 7번(AWS EventBridge/ECS)에서 붙일 예정.
 
 ## 프론트엔드 (서버 렌더링, `templates/`)
 
@@ -281,6 +313,6 @@ POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywor
 
 ## 다음에 할 일
 
-2-1, 2-2 완료됨. 다음은 2-3(기존 collector.py를 사용자별 키워드로
-파라미터화해서 카카오 발송까지 연결)부터 진행. 진행하기 전에 이 파일의
-로드맵 체크리스트를 업데이트해서 어디까지 했는지 계속 반영할 것.
+2-1, 2-2, 2-3 완료됨. 다음은 2-4(LLM 대화형 키워드 추출, 위 스펙대로 구현)부터
+진행. 진행하기 전에 이 파일의 로드맵 체크리스트를 업데이트해서 어디까지
+했는지 계속 반영할 것.
