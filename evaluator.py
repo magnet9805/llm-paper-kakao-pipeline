@@ -126,6 +126,12 @@ if __name__ == "__main__":
 
     SAMPLE_SIZE = 3  # Gemini 무료 티어 할당량(20건/일)을 아끼기 위해 소수만 스팟체크
 
+    print("=== 평가 항목 안내 ===")
+    print("faithful : 요약이 초록에 없는 내용(수치/방법론/결과)을 지어내지 않았는가 (Gemini 판단)")
+    print("relevant : 요약이 논문의 핵심 아이디어/기여를 담고 있는가 (Gemini 판단)")
+    print(f"concise  : 요약이 {SUMMARY_LENGTH_LIMIT}자 제한을 지켰는가 (글자 수로 바로 계산, LLM 판단 아님)")
+    print("결과 표시: ✓ = 기준 통과, ✗ = 기준 미달\n")
+
     print(f"파이프라인을 실행해서 {SAMPLE_SIZE}편을 요약한 뒤 채점합니다...")
     result = run_pipeline(top_n=30, papers_per_send=SAMPLE_SIZE)
     summarized = result["summarized_papers"]
@@ -136,7 +142,7 @@ if __name__ == "__main__":
         evaluated = evaluate_summaries(summarized)
         for r in evaluated:
             j = r["judgment"]
-            mark = lambda b: "O" if b else "X"
+            mark = lambda b: "✓" if b else "✗"
             print(f"\n- {r['title'][:70]}")
             print(
                 f"  faithful={mark(j['faithful'])} relevant={mark(j['relevant'])} "
