@@ -60,7 +60,7 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
      아래 "홈 화면 진입점"·"그룹별 발송 on/off" 섹션 참고)
 3. [x] Docker 컨테이너화 (아래 "Docker 컨테이너화" 섹션 참고)
 4. [x] 논문 검색/조회 로직을 MCP 서버로 분리 (아래 "MCP 서버" 섹션 참고)
-5. [ ] LangGraph로 Collector/Filter/Summarizer 노드 그래프화
+5. [x] LangGraph로 Collector/Filter/Summarizer 노드 그래프화 (아래 "LangGraph 파이프라인" 섹션 참고)
 6. [ ] RAGAS로 요약 품질 평가 하네스 구축
 7. [ ] AWS 배포 + 도메인 연결 + 스케줄링 (EventBridge/ECS)
 8. [ ] (선택) vLLM 셀프호스팅으로 요약 모델 교체
@@ -449,6 +449,51 @@ uv run python mcp_server.py       # stdio 서버로 실행 (Claude Desktop 등 �
 문자열을 문자 단위로 순회하게 되는 함정이 있었음). `search_papers`에 그룹을
 하나(OR)/둘(AND)로 각각 호출해 교집합 개수가 실제로 줄어드는 것까지 확인함.
 
+## LangGraph 파이프라인
+
+`pipeline_graph.py`에 Collector/Filter/Summarizer를 LangGraph의 `StateGraph` 노드로
+그래프화했다. 기존에는 `main.py`/`server.py`가 `collect_papers()`(collector+filter가
+이미 합쳐진 함수) -> `summarize_papers()`를 순서대로 그냥 파이썬 함수 호출로
+이어붙였는데, 이제는 세 단계를 명시적인 그래프 노드(`collector` -> `filter` ->
+`summarizer`, 지금은 선형)로 표현한다. 실질 동작은 바뀌지 않지만, 다음 단계들
+(로드맵 6번 RAGAS 품질 평가 노드 추가, 요약 실패 시 재시도/분기 등)을 그래프에
+자연스럽게 끼워 넣을 수 있는 구조를 미리 만들어두는 것이 목적 - 로드맵 인트로에서
+말한 "멀티에이전트 오케스트레이션" 문제를 해결하는 단계.
+
+**MCP 서버(4번)와의 관계 - 여기서도 같은 판단을 반복했다.** `pipeline_graph.py`의
+`collector_node`/`filter_node`는 `mcp_server.py`의 도구를 호출하지 않고
+`collector.py`를 그대로 import해서 쓴다. 같은 프로세스 안에서 도는 파이프라인을
+굳이 MCP 프로토콜 왕복으로 바꿀 이유가 없기 때문 - MCP 서버는 "이 앱 바깥"에서
+재사용하기 위한 별도 진입점이라는 4번 섹션의 설계 판단을 그대로 따른 것이다.
+
+**State 스키마** (`TypedDict`, `pipeline_graph.PipelineState`):
+```python
+target_date: str | None       # 입력 - 없으면 어제 날짜
+top_n: int                    # 입력 - HF Daily Papers 상위 몇 개를 볼지
+clusters: dict | None         # 입력 - collector.py의 클러스터 형식 (None이면 KEYWORD_CLUSTERS 기본값)
+seen_ids: set | None           # 입력 - 이미 보낸 논문 hf_id 집합
+papers_per_send: int           # 입력 - 필터 통과 논문 중 몇 편을 요약/발송할지
+raw_papers: list[dict]         # collector 노드 출력
+filtered_papers: list[dict]    # filter 노드 출력 (matched_clusters 포함, 랭킹 정렬됨)
+summarized_papers: list[dict]  # summarizer 노드 출력 (summary 필드 추가) - 최종 결과물
+```
+
+`run_pipeline(target_date, top_n, clusters, seen_ids, papers_per_send)`이 그래프를
+`invoke()`하고 최종 state 전체를 그대로 반환한다 - 최종 결과물은
+`result["summarized_papers"]`지만, `result["filtered_papers"]`(개수/매칭 클러스터)도
+그대로 남아있어 `main.py`가 콘솔 로그에 그대로 활용한다. `summarizer_node`는
+필터 통과 논문이 0편이면 Gemini 클라이언트를 만들 필요도 없이 바로 빈 리스트를
+반환한다 (불필요한 API 호출/키 검증 방지).
+
+`main.py`와 `server.py`의 `/api/send-now`는 각각 `collect_papers()`+
+`summarize_papers()`를 직접 이어붙이던 자리를 `run_pipeline()` 호출 하나로
+대체했다 - 개인용 스크립트/웹 서비스 양쪽 다 동일한 그래프를 재사용한다.
+
+**검증**: `papers_per_send=0`으로 그래프 연결(collector -> filter까지만 실행되고
+summarizer가 조기 종료되는지)을 먼저 확인하고, `papers_per_send=1`로 실제 Gemini
+API까지 호출되는 종단간 테스트를 1건만 돌려 무료 티어 할당량을 아끼면서 확인했다.
+Docker 이미지도 `langgraph` 의존성 포함해서 재빌드 후 컨테이너 기동까지 확인함.
+
 ## 코딩/설계 컨벤션
 
 - 패키지 관리: uv만 사용. `pip install`이나 `requirements.txt` 다시 만들지 말 것
@@ -460,8 +505,8 @@ uv run python mcp_server.py       # stdio 서버로 실행 (Claude Desktop 등 �
 
 ## 다음에 할 일
 
-2-1~2-5, 3(Docker 컨테이너화), 4(MCP 서버 분리)까지 완료됨. 다음은 로드맵 5번
-(LangGraph로 Collector/Filter/Summarizer 노드 그래프화)부터 진행 - 이때 Collector
-노드가 `mcp_server.py`의 도구를 호출하도록 만들지, 아니면 계속 `collector.py`를
-직접 import할지는 LangGraph 붙일 때 다시 판단할 것. 진행하기 전에 이 파일의
-로드맵 체크리스트를 업데이트해서 어디까지 했는지 계속 반영할 것.
+2-1~2-5, 3(Docker 컨테이너화), 4(MCP 서버 분리), 5(LangGraph 그래프화)까지 완료됨.
+다음은 로드맵 6번(RAGAS로 요약 품질 평가 하네스 구축)부터 진행 - `pipeline_graph.py`의
+`summarizer_node` 출력(`summarized_papers`)을 RAGAS로 평가하는 노드나 별도 하네스를
+추가하는 방향이 될 것. 진행하기 전에 이 파일의 로드맵 체크리스트를 업데이트해서
+어디까지 했는지 계속 반영할 것.
