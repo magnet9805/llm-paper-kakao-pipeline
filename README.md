@@ -13,8 +13,8 @@
   [웹 서비스 실행](#웹-서비스-실행-fastapi) 참고, 진행 상황은 `CLAUDE.md`의
   개발 로드맵 참고).
 
-Docker, LangGraph, MCP, RAGAS, AWS 배포는 아직 없다. 단계별로 점진적으로
-리팩터링해 나갈 예정.
+LangGraph, MCP, RAGAS, AWS 배포는 아직 없다. 단계별로 점진적으로 리팩터링해
+나갈 예정.
 
 ## uv란?
 
@@ -130,6 +130,26 @@ uv run uvicorn server:app --reload
   - 로드맵 7번 참고)
 - 최초 실행 시 `app.db`(SQLite)가 자동 생성됨 (커밋 대상 아님, `.gitignore` 참고)
 
+## Docker로 실행
+
+웹 서비스(`server.py`)를 컨테이너로 띄울 수 있다. `.env`는 [설정](#설정) 단계까지
+먼저 끝내둬야 한다 (이미지에는 포함되지 않고, 실행 시점에 주입된다).
+
+```bash
+docker compose up --build
+```
+
+- `http://localhost:8000/`으로 접속하는 방식은 로컬에서 `uv run uvicorn`으로 띄웠을
+  때와 동일하다 (포트 매핑이 8000:8000이라 카카오 콘솔의 Redirect URI를 새로 등록할
+  필요 없음).
+- `app.db`는 이미지 레이어가 아니라 `app-data`라는 이름의 Docker 볼륨에 저장된다
+  (`DB_PATH` 환경변수로 `db.py`에 전달) - `docker compose down` 후 다시 `up`해도
+  데이터가 그대로 남는다. 완전히 초기화하려면 `docker compose down -v`.
+- 개인용 스크립트(`main.py`)를 컨테이너 안에서 한 번 실행하고 싶다면:
+  ```bash
+  docker compose run --rm web uv run python main.py
+  ```
+
 ## 개발 로드맵
 
 전체 로드맵과 각 단계의 상세 설계(DB 스키마, API 엔드포인트, UX 스펙 등)는
@@ -142,7 +162,7 @@ uv run uvicorn server:app --reload
   - [x] 2-3. 사용자별 키워드로 카카오 발송 연결 (`POST /api/send-now`)
   - [x] 2-4. LLM 대화형 키워드 추출 (Gemini function calling)
   - [x] 2-5. 홈 화면 진입점 분리 + 그룹별 발송 on/off
-- [ ] 3. Docker 컨테이너화
+- [x] 3. Docker 컨테이너화
 - [ ] 4. 논문 검색/조회 로직을 MCP 서버로 분리
 - [ ] 5. LangGraph로 파이프라인 그래프화
 - [ ] 6. RAGAS로 요약 품질 평가 하네스 구축

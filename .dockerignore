@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+.git/
+.claude/
+
+.env
+kakao_token.json
+seen_papers.json
+app.db

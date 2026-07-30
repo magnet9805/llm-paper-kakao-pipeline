@@ -1,0 +1,16 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # app.db를 이미지 레이어가 아니라 아래 볼륨에 둬서, 컨테이너를 재생성해도
+      # (docker compose down/up, 이미지 재빌드 등) 데이터가 사라지지 않게 한다.
+      - DB_PATH=/app/data/app.db
+    volumes:
+      - app-data:/app/data
+
+volumes:
+  app-data:

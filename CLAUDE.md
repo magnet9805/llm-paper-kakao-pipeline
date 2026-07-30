@@ -58,7 +58,7 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
      `POST /api/keyword-chat` + `templates/_chat_modal.html`)
    - [x] 2-5. 홈 화면 진입점 분리 + 그룹별 발송 on/off (스펙에 없던 추가 개선,
      아래 "홈 화면 진입점"·"그룹별 발송 on/off" 섹션 참고)
-3. [ ] Docker 컨테이너화
+3. [x] Docker 컨테이너화 (아래 "Docker 컨테이너화" 섹션 참고)
 4. [ ] 논문 검색/조회 로직을 MCP 서버로 분리
 5. [ ] LangGraph로 Collector/Filter/Summarizer 노드 그래프화
 6. [ ] RAGAS로 요약 품질 평가 하네스 구축
@@ -368,6 +368,35 @@ POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywor
   구성할 때 꺼진 그룹을 제외한다 - 즉 "발송 대상에서만 빠진다".
 - API: `PATCH /api/keyword-groups/{group_id}/active` (body: `{"is_active": bool}`).
 
+## Docker 컨테이너화
+
+웹 서비스(`server.py`)를 컨테이너로 띄울 수 있게 `Dockerfile`, `.dockerignore`,
+`docker-compose.yml`을 추가했다 (`main.py` 개인용 스크립트는 컨테이너화 대상이
+아니고, 필요하면 같은 이미지 안에서 커맨드만 바꿔 1회성으로 실행한다).
+
+- **베이스 이미지**: `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` - uv가 이미
+  설치돼 있어 별도로 `pip install uv`할 필요가 없다. 이 프로젝트는 pip/venv 대신
+  uv만 쓰기로 했으므로(코딩 컨벤션 참고) 컨테이너 안에서도 동일하게 `uv sync`/
+  `uv run`으로 의존성을 관리한다.
+- **레이어 캐싱**: `pyproject.toml`/`uv.lock`만 먼저 COPY해서 `uv sync --locked
+  --no-install-project`를 한 번 돌리고, 그 다음에야 나머지 소스를 COPY한다 -
+  소스 코드만 바뀐 재빌드에서는 의존성 설치 레이어가 캐시돼 재사용된다.
+  `--locked`는 `uv.lock`이 `pyproject.toml`과 어긋나 있으면 빌드를 실패시켜서,
+  로컬과 다른 버전이 컨테이너에 들어가는 걸 막아준다.
+- **SQLite 영속성**: 컨테이너를 재생성(재빌드, `docker compose down/up`)해도
+  `app.db`가 사라지면 안 되므로, `db.py`의 `DB_PATH`를 `os.environ.get("DB_PATH",
+  "app.db")`로 바꿔 환경변수로 오버라이드 가능하게 했다. `docker-compose.yml`은
+  `app-data`라는 이름의 볼륨을 `/app/data`에 마운트하고 `DB_PATH=/app/data/app.db`를
+  주입한다 - 로컬 실행(`uv run uvicorn ...`)에서는 이 환경변수가 없으니 그대로
+  `app.db`(프로젝트 루트)를 쓴다.
+- **비밀값**: `.env`는 이미지에 절대 COPY하지 않는다(`.dockerignore`에 명시) -
+  `docker-compose.yml`의 `env_file: .env`로 실행 시점에만 컨테이너 환경변수로
+  주입한다. `server.py`의 `load_dotenv()`는 `.env` 파일이 없어도 에러 없이
+  그냥 넘어가므로, 이미 주입된 환경변수를 덮어쓰지 않고 그대로 쓴다.
+- **포트/카카오 Redirect URI**: 호스트:컨테이너 포트 매핑을 8000:8000으로 맞춰서,
+  로컬에서 `uv run uvicorn`으로 띄웠을 때와 접속 주소(`http://localhost:8000`)가
+  동일하다 - 카카오 개발자 콘솔의 Redirect URI를 Docker용으로 새로 등록할 필요 없음.
+
 ## 코딩/설계 컨벤션
 
 - 패키지 관리: uv만 사용. `pip install`이나 `requirements.txt` 다시 만들지 말 것
@@ -379,6 +408,6 @@ POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywor
 
 ## 다음에 할 일
 
-2-1~2-5 모두 완료됨 (LLM 대화형 키워드 추출 + 홈 화면 진입점 분리 + 그룹별 발송
-on/off). 다음은 로드맵 3번(Docker 컨테이너화)부터 진행. 진행하기 전에 이 파일의
-로드맵 체크리스트를 업데이트해서 어디까지 했는지 계속 반영할 것.
+2-1~2-5, 3(Docker 컨테이너화)까지 완료됨. 다음은 로드맵 4번(논문 검색/조회 로직을
+MCP 서버로 분리)부터 진행. 진행하기 전에 이 파일의 로드맵 체크리스트를 업데이트해서
+어디까지 했는지 계속 반영할 것.

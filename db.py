@@ -3,11 +3,14 @@ SQLite 기반 사용자 저장소. 카카오 소셜 로그인이 곧 회원가�
 카카오 access/refresh token도 users 테이블에 같이 저장한다.
 """
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 
-DB_PATH = "app.db"
+# Docker 컨테이너에서는 DB_PATH를 볼륨 마운트 경로(예: /app/data/app.db)로 지정해
+# 컨테이너를 재생성해도 데이터가 사라지지 않게 한다 (docker-compose.yml 참고).
+DB_PATH = os.environ.get("DB_PATH", "app.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
