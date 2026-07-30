@@ -61,7 +61,8 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
 3. [x] Docker 컨테이너화 (아래 "Docker 컨테이너화" 섹션 참고)
 4. [x] 논문 검색/조회 로직을 MCP 서버로 분리 (아래 "MCP 서버" 섹션 참고)
 5. [x] LangGraph로 Collector/Filter/Summarizer 노드 그래프화 (아래 "LangGraph 파이프라인" 섹션 참고)
-6. [ ] RAGAS로 요약 품질 평가 하네스 구축
+6. [x] RAGAS로 요약 품질 평가 하네스 구축 (실제로는 ragas 패키지를 포기하고 직접
+   구현 - 아래 "요약 품질 평가" 섹션 참고)
 7. [ ] AWS 배포 + 도메인 연결 + 스케줄링 (EventBridge/ECS)
 8. [ ] (선택) vLLM 셀프호스팅으로 요약 모델 교체
 9. [ ] (선택) A2A로 Collector/Evaluator 에이전트 간 통신 분리
@@ -494,6 +495,52 @@ summarizer가 조기 종료되는지)을 먼저 확인하고, `papers_per_send=1
 API까지 호출되는 종단간 테스트를 1건만 돌려 무료 티어 할당량을 아끼면서 확인했다.
 Docker 이미지도 `langgraph` 의존성 포함해서 재빌드 후 컨테이너 기동까지 확인함.
 
+## 요약 품질 평가 (evaluator.py)
+
+**ragas 패키지를 포기한 이유 (중요 - 다시 시도하지 말 것):** 로드맵 6번은 원래
+"RAGAS로 요약 품질 평가 하네스 구축"이었지만, 실제로 시도해보니 두 가지 이유로
+포기하고 직접 구현했다.
+
+1. **ragas 패키지 자체가 langgraph와 같은 환경에 설치 불가능한 버그가 있음.**
+   `ragas`(0.4.3, 0.3.9 둘 다 확인)는 `ragas/llms/base.py`에서 무조건
+   `from langchain_community.chat_models.vertexai import ChatVertexAI`를
+   import하는데, 이 서브모듈이 최신 `langchain-community`(sunset되면서 개별
+   통합 패키지로 이전 중)에는 더 이상 없다 - ragas가 `langchain-community`
+   버전을 제대로 고정해두지 않은 ragas 쪽의 실제 패키징 버그다. 우회하려고
+   `langchain-community`를 예전 버전(0.3.19)으로 고정해봤지만, 그 버전은
+   `langchain-core<1.0.0`을 요구하는 반면 우리가 로드맵 5번에서 이미 설치한
+   `langgraph==1.2.10`은 `langchain-core>=1.4.7`을 요구해서 **uv 리졸버가 명확히
+   "동시에 만족 불가능"이라고 실패**했다. 즉 지금 이 프로젝트에서는 ragas와
+   langgraph를 같은 가상환경에 공존시킬 방법이 없다 (별도 가상환경으로 완전히
+   격리하면 가능하지만, 운영 부담 대비 이득이 크지 않다고 판단해 보류).
+2. **애초에 RAGAS의 핵심 지표가 이 파이프라인에 잘 안 맞음.** RAGAS는
+   "질문 -> 검색된 문서 -> 답변" 구조의 RAG 시스템을 겨냥한 지표(Context
+   Precision/Recall 등)가 중심인데, 이 파이프라인은 Collector(upvotes 정렬) ->
+   Filter(규칙 기반 키워드 매칭) -> Summarizer(요약)라 "검색" 단계가 없다.
+   평가가 실제로 의미 있는 단계는 Summarizer 하나뿐이다 (Collector/Filter는
+   결정론적 로직이라 애초에 "품질"을 평가할 대상이 아님).
+
+**그래서 한 것**: `evaluator.py`에 Gemini 자신을 심사자(LLM-as-judge)로 쓰는
+자체 채점 로직을 직접 구현했다 (keyword_chat.py와 같은 function calling 패턴
+재사용). 채점 기준 3가지:
+- `faithful`: 요약이 초록에 없는 내용(수치/방법론/결과)을 지어내지 않았는가 - Gemini 판단
+- `relevant`: 요약이 논문의 핵심 아이디어/기여를 담고 있는가 - Gemini 판단
+- `concise`: `summarizer.py`가 지시하는 150자 제약을 지켰는가 - LLM 호출 없이
+  `len(summary)`로 바로 계산 (결정론적이라 굳이 LLM에 물어볼 필요 없음)
+
+`evaluate_summaries(papers)`가 각 논문에 `judgment` 필드를 붙여 반환하고,
+`summarize_evaluation(results)`가 `faithful_rate`/`relevant_rate`/`concise_rate`로
+종합한다. `uv run python evaluator.py`로 실행하면 `pipeline_graph.run_pipeline()`을
+조금만(기본 3편) 돌려서 채점 리포트를 콘솔에 출력한다 - Gemini 무료 티어
+할당량(20건/일)이 빠듯해서, 요약 1건당 채점도 1건씩 추가로 드니 샘플 크기를
+일부러 작게 유지한다.
+
+**검증**: 파이프라인을 통해서가 아니라, 충실한 요약 하나 + 초록에 없는 내용(양자
+컴퓨팅, 100배 속도, 99.9% 정확도)을 지어낸 요약 하나를 직접 만들어서
+`evaluate_summaries()`에 넣어봤다 - 충실한 쪽은 `faithful=True`, 지어낸 쪽은
+`faithful=False`로 정확히 구분해내는 것을 확인했다 (이 판별력 테스트가 실제
+파이프라인을 돌려보는 것보다 하네스가 제대로 작동하는지 더 직접적으로 검증해준다).
+
 ## 코딩/설계 컨벤션
 
 - 패키지 관리: uv만 사용. `pip install`이나 `requirements.txt` 다시 만들지 말 것
@@ -505,8 +552,7 @@ Docker 이미지도 `langgraph` 의존성 포함해서 재빌드 후 컨테이�
 
 ## 다음에 할 일
 
-2-1~2-5, 3(Docker 컨테이너화), 4(MCP 서버 분리), 5(LangGraph 그래프화)까지 완료됨.
-다음은 로드맵 6번(RAGAS로 요약 품질 평가 하네스 구축)부터 진행 - `pipeline_graph.py`의
-`summarizer_node` 출력(`summarized_papers`)을 RAGAS로 평가하는 노드나 별도 하네스를
-추가하는 방향이 될 것. 진행하기 전에 이 파일의 로드맵 체크리스트를 업데이트해서
-어디까지 했는지 계속 반영할 것.
+2-1~2-5, 3(Docker 컨테이너화), 4(MCP 서버 분리), 5(LangGraph 그래프화),
+6(요약 품질 평가 - ragas 대신 evaluator.py 직접 구현)까지 완료됨. 다음은 로드맵
+7번(AWS 배포 + 도메인 연결 + 스케줄링)부터 진행. 진행하기 전에 이 파일의 로드맵
+체크리스트를 업데이트해서 어디까지 했는지 계속 반영할 것.

@@ -13,7 +13,7 @@
   [웹 서비스 실행](#웹-서비스-실행-fastapi) 참고, 진행 상황은 `CLAUDE.md`의
   개발 로드맵 참고).
 
-RAGAS, AWS 배포는 아직 없다. 단계별로 점진적으로 리팩터링해 나갈 예정.
+AWS 배포는 아직 없다. 단계별로 점진적으로 리팩터링해 나갈 예정.
 
 ## uv란?
 
@@ -169,6 +169,17 @@ LangGraph `StateGraph` 노드로 그래프화했다. `main.py`와 `server.py`의
 `POST /api/send-now`가 공통으로 `pipeline_graph.run_pipeline(...)` 하나를 호출해서
 세 단계를 전부 실행한다 (설계 배경은 `CLAUDE.md`의 "LangGraph 파이프라인" 섹션 참고).
 
+## 요약 품질 평가
+
+`evaluator.py`가 Summarizer가 생성한 요약의 품질을 Gemini 자신을 심사자로 써서
+채점한다 (faithful/relevant는 LLM 판단, concise는 길이 체크). 공식 RAGAS 패키지는
+langgraph와 의존성 충돌로 설치가 불가능했고 애초에 이 파이프라인 구조와도 잘
+안 맞아서 직접 구현했다 - 자세한 사유는 `CLAUDE.md`의 "요약 품질 평가" 섹션 참고.
+
+```bash
+uv run python evaluator.py   # 파이프라인을 조금만 돌려서(기본 3편) 채점 리포트 출력
+```
+
 ## 개발 로드맵
 
 전체 로드맵과 각 단계의 상세 설계(DB 스키마, API 엔드포인트, UX 스펙 등)는
@@ -184,6 +195,6 @@ LangGraph `StateGraph` 노드로 그래프화했다. `main.py`와 `server.py`의
 - [x] 3. Docker 컨테이너화
 - [x] 4. 논문 검색/조회 로직을 MCP 서버로 분리
 - [x] 5. LangGraph로 파이프라인 그래프화
-- [ ] 6. RAGAS로 요약 품질 평가 하네스 구축
+- [x] 6. 요약 품질 평가 하네스 구축 (RAGAS 대신 자체 LLM-as-judge로 구현)
 - [ ] 7. AWS 배포 + 스케줄링
 - [ ] 8. (선택) vLLM 셀프호스팅, A2A 멀티에이전트 통신
