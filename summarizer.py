@@ -8,9 +8,13 @@ collect_papers()가 반환한 논문 dict 리스트를 받아 각 논문에 'sum
 import os
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+
+
+class SummaryQuotaExceededError(Exception):
+    """Gemini 무료 티어의 하루 요청 한도(20건/일)를 넘겨서 요약에 실패했을 때 발생시킨다."""
 
 SYSTEM_PROMPT = (
     "너는 AI/ML 논문을 바쁜 실무자에게 소개하는 어시스턴트다. "
@@ -25,17 +29,22 @@ SUMMARY_SAFETY_CAP = 180  # Gemini가 길이 지시를 안 지켰을 때의 최�
 
 
 def _summarize_one(client: genai.Client, paper: dict) -> str:
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=f"제목: {paper['title']}\n\n초록: {paper['abstract']}",
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            # 이 모델은 내부 reasoning(thinking) 토큰을 자동으로 쓰는데 요청마다 편차가 크고
-            # (실측 300~1600+), thinking_budget으로 끄거나 제한하는 것도 이제 거부되거나
-            # 무시된다. 그래서 thinking + 답변이 항상 다 들어가도록 넉넉하게 잡는다.
-            max_output_tokens=3000,
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=f"제목: {paper['title']}\n\n초록: {paper['abstract']}",
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                # 이 모델은 내부 reasoning(thinking) 토큰을 자동으로 쓰는데 요청마다 편차가 크고
+                # (실측 300~1600+), thinking_budget으로 끄거나 제한하는 것도 이제 거부되거나
+                # 무시된다. 그래서 thinking + 답변이 항상 다 들어가도록 넉넉하게 잡는다.
+                max_output_tokens=3000,
+            ),
+        )
+    except errors.ClientError as e:
+        if e.code == 429:
+            raise SummaryQuotaExceededError from e
+        raise
     summary = response.text.strip()
     if len(summary) > SUMMARY_SAFETY_CAP:
         summary = summary[: SUMMARY_SAFETY_CAP - 1].rstrip() + "…"

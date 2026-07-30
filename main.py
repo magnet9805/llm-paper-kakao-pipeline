@@ -17,6 +17,7 @@ load_dotenv()
 from collector import mark_as_seen  # noqa: E402
 from kakao_sender import send_daily_papers  # noqa: E402
 from pipeline_graph import run_pipeline  # noqa: E402
+from summarizer import SummaryQuotaExceededError  # noqa: E402
 
 TOP_N_CANDIDATES = 30  # HF Daily Papers에서 볼 상위 후보 개수
 PAPERS_PER_DAY = 3  # 사용자가 정하는 하루 발송 개수
@@ -24,7 +25,11 @@ PAPERS_PER_DAY = 3  # 사용자가 정하는 하루 발송 개수
 
 def run():
     print(f"1) HF Daily Papers 상위 {TOP_N_CANDIDATES}개 수집 및 필터링 중...")
-    result = run_pipeline(top_n=TOP_N_CANDIDATES, papers_per_send=PAPERS_PER_DAY)
+    try:
+        result = run_pipeline(top_n=TOP_N_CANDIDATES, papers_per_send=PAPERS_PER_DAY)
+    except SummaryQuotaExceededError:
+        print("Gemini 무료 티어의 하루 요청 한도(20건)를 다 썼습니다. 내일 다시 실행해주세요.")
+        return
     candidates = result["filtered_papers"]
     print(f"   -> 키워드 클러스터 매칭 통과: {len(candidates)}편")
     for p in candidates:
