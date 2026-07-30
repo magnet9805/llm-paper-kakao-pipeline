@@ -59,7 +59,7 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
    - [x] 2-5. 홈 화면 진입점 분리 + 그룹별 발송 on/off (스펙에 없던 추가 개선,
      아래 "홈 화면 진입점"·"그룹별 발송 on/off" 섹션 참고)
 3. [x] Docker 컨테이너화 (아래 "Docker 컨테이너화" 섹션 참고)
-4. [ ] 논문 검색/조회 로직을 MCP 서버로 분리
+4. [x] 논문 검색/조회 로직을 MCP 서버로 분리 (아래 "MCP 서버" 섹션 참고)
 5. [ ] LangGraph로 Collector/Filter/Summarizer 노드 그래프화
 6. [ ] RAGAS로 요약 품질 평가 하네스 구축
 7. [ ] AWS 배포 + 도메인 연결 + 스케줄링 (EventBridge/ECS)
@@ -397,6 +397,58 @@ POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywor
   로컬에서 `uv run uvicorn`으로 띄웠을 때와 접속 주소(`http://localhost:8000`)가
   동일하다 - 카카오 개발자 콘솔의 Redirect URI를 Docker용으로 새로 등록할 필요 없음.
 
+## MCP 서버
+
+`collector.py`의 논문 검색/조회 로직(`fetch_top_daily_papers`, `filter_by_keywords`)을
+`mcp_server.py`로 노출했다. 목적은 프로젝트 목적 섹션에 적어둔 스택 도입 이유 그대로 -
+Docker(배포 자동화) 다음 문제인 **"재사용 가능한 도구화"**: 지금은 이 논문 검색
+기능이 `server.py`가 import해서 쓰는 파이썬 함수로만 존재하는데, MCP로 감싸두면
+Claude Desktop 같은 임의의 MCP 클라이언트나 로드맵 5번(LangGraph)의 Collector
+노드가 파이썬 모듈을 직접 import하지 않고도 표준 프로토콜로 호출할 수 있다.
+
+**중요한 설계 판단 - `server.py`는 그대로 collector.py를 직접 호출한다.** MCP 서버는
+`server.py`를 대체하는 게 아니라, "이 앱 바깥"에서 논문 검색 기능을 재사용하기 위한
+**별도의 진입점**이다. 같은 프로세스 안에서 이뤄지는 호출(웹 서비스의 `/api/send-now`)까지
+프로토콜 왕복으로 바꿀 이유가 없어서, `_clusters_from_keyword_groups()` 기반의
+멀티클러스터 우선순위 랭킹 로직은 그대로 `server.py`/`collector.py`에 남겨뒀다.
+
+**패키지**: `mcp[cli]` (공식 MCP Python SDK, `uv add "mcp[cli]"`로 설치). 이 SDK는
+버전에 따라 공개 API가 크게 바뀌므로 주의할 것 - `mcp==2.0.0` 기준으로는 이전에
+흔히 알려진 `from mcp.server.fastmcp import FastMCP`가 **더 이상 존재하지 않고**,
+`from mcp.server.mcpserver import MCPServer`로 이름과 경로가 바뀌었다 (클래스 이름
+자체가 `FastMCP` → `MCPServer`). 새 세션에서 이 코드를 보고 옛날 이름으로 되돌리려
+하지 말 것 - 설치된 버전을 `python -c "import mcp.server; help(...)"`로 직접 확인하고
+맞춰야 한다.
+
+**노출한 도구 2개** (둘 다 `collector.py` 함수를 얇게 감싼 것 - 새 로직을 만들지 않음):
+```python
+list_daily_papers(date: str | None = None, top_n: int = 30) -> list[dict]
+# fetch_top_daily_papers()를 그대로 노출. 키워드 필터 없이 "오늘 뭐가 화제인지" 훑어볼 때.
+
+search_papers(keyword_groups: list[list[str]], date: str | None = None, top_n: int = 30) -> list[dict]
+# filter_by_keywords()를 감쌈. keyword_groups는 "그룹의 리스트"로, 그룹 사이는 AND,
+# 그룹 안 키워드끼리는 OR - collector.py의 클러스터 매칭 규칙(_matches_cluster)을
+# 그대로 일반화한 것이다. 그룹 하나만 넘기면 기존 클러스터의 평범한 OR 리스트와
+# 동일하고, 그룹 두 개를 넘기면 KEYWORD_CLUSTERS의 time_series처럼 AND 조건이 된다.
+# seen_ids는 명시적으로 빈 집합을 넘긴다 - 안 그러면 filter_by_keywords의 기본값이
+# 개인용 스크립트의 seen_papers.json 파일을 읽어버려서, 이 범용 검색 도구의 결과가
+# 이 서버를 실행하는 로컬 머신의 개인 발송 이력에 은근슬쩍 좌우되게 된다.
+```
+
+**실행 방법:**
+```bash
+uv run mcp dev mcp_server.py      # MCP Inspector(웹 UI)로 도구 직접 테스트
+uv run python mcp_server.py       # stdio 서버로 실행 (Claude Desktop 등 클라이언트가 이 커맨드로 subprocess 실행)
+```
+
+**검증 방법**: Claude Desktop 없이도, `mcp.client.stdio.stdio_client` +
+`mcp.client.session.ClientSession`으로 실제 stdio 프로토콜을 통해 도구를 호출하는
+테스트 스크립트를 스크래치패드에 작성해서 확인했다 (`session.call_tool(...)`의
+결과는 `.content`가 아니라 `.structured_content["result"]`에 파싱된 리스트가 들어
+있음 - `.content`의 텍스트 블록은 별도로 문자열화된 표현이라 이중 디코딩하면
+문자열을 문자 단위로 순회하게 되는 함정이 있었음). `search_papers`에 그룹을
+하나(OR)/둘(AND)로 각각 호출해 교집합 개수가 실제로 줄어드는 것까지 확인함.
+
 ## 코딩/설계 컨벤션
 
 - 패키지 관리: uv만 사용. `pip install`이나 `requirements.txt` 다시 만들지 말 것
@@ -408,6 +460,8 @@ POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywor
 
 ## 다음에 할 일
 
-2-1~2-5, 3(Docker 컨테이너화)까지 완료됨. 다음은 로드맵 4번(논문 검색/조회 로직을
-MCP 서버로 분리)부터 진행. 진행하기 전에 이 파일의 로드맵 체크리스트를 업데이트해서
-어디까지 했는지 계속 반영할 것.
+2-1~2-5, 3(Docker 컨테이너화), 4(MCP 서버 분리)까지 완료됨. 다음은 로드맵 5번
+(LangGraph로 Collector/Filter/Summarizer 노드 그래프화)부터 진행 - 이때 Collector
+노드가 `mcp_server.py`의 도구를 호출하도록 만들지, 아니면 계속 `collector.py`를
+직접 import할지는 LangGraph 붙일 때 다시 판단할 것. 진행하기 전에 이 파일의
+로드맵 체크리스트를 업데이트해서 어디까지 했는지 계속 반영할 것.

@@ -13,8 +13,7 @@
   [웹 서비스 실행](#웹-서비스-실행-fastapi) 참고, 진행 상황은 `CLAUDE.md`의
   개발 로드맵 참고).
 
-LangGraph, MCP, RAGAS, AWS 배포는 아직 없다. 단계별로 점진적으로 리팩터링해
-나갈 예정.
+LangGraph, RAGAS, AWS 배포는 아직 없다. 단계별로 점진적으로 리팩터링해 나갈 예정.
 
 ## uv란?
 
@@ -150,6 +149,19 @@ docker compose up --build
   docker compose run --rm web uv run python main.py
   ```
 
+## MCP 서버
+
+논문 검색/조회 로직(`collector.py`)을 `mcp_server.py`로 별도 노출해뒀다 - 이 앱의
+파이썬 코드를 직접 import하지 않고도, Claude Desktop 같은 MCP 클라이언트가 표준
+프로토콜로 논문 검색 도구를 가져다 쓸 수 있다 (설계 배경은 `CLAUDE.md`의 "MCP 서버"
+섹션 참고). 웹 서비스(`server.py`)의 동작에는 영향 없음 - 그쪽은 여전히
+`collector.py`를 직접 호출한다.
+
+```bash
+uv run mcp dev mcp_server.py   # MCP Inspector(웹 UI)로 도구 직접 테스트
+uv run python mcp_server.py    # stdio 서버로 실행 (MCP 클라이언트가 이 커맨드로 실행)
+```
+
 ## 개발 로드맵
 
 전체 로드맵과 각 단계의 상세 설계(DB 스키마, API 엔드포인트, UX 스펙 등)는
@@ -163,7 +175,7 @@ docker compose up --build
   - [x] 2-4. LLM 대화형 키워드 추출 (Gemini function calling)
   - [x] 2-5. 홈 화면 진입점 분리 + 그룹별 발송 on/off
 - [x] 3. Docker 컨테이너화
-- [ ] 4. 논문 검색/조회 로직을 MCP 서버로 분리
+- [x] 4. 논문 검색/조회 로직을 MCP 서버로 분리
 - [ ] 5. LangGraph로 파이프라인 그래프화
 - [ ] 6. RAGAS로 요약 품질 평가 하네스 구축
 - [ ] 7. AWS 배포 + 스케줄링
