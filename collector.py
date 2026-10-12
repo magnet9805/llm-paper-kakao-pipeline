@@ -20,6 +20,7 @@ import requests
 
 SEEN_PAPERS_FILE = "seen_papers.json"
 HF_DAILY_PAPERS_URL = "https://huggingface.co/api/daily_papers"
+MAX_LOOKBACK_DAYS = 3  # 어제가 비어 있을 때 며칠 전까지 거슬러 올라갈지 (일/토/금)
 
 # 관심 키워드 클러스터. 모두 소문자로 매칭한다.
 KEYWORD_CLUSTERS = {
@@ -86,6 +87,17 @@ def _save_seen_ids(seen_ids: set) -> None:
         json.dump(list(seen_ids), f)
 
 
+def _fetch_daily_items(target_date: str) -> list[dict]:
+    """HF Daily Papers API에서 특정 날짜의 원본 항목 리스트를 그대로 가져온다."""
+    res = requests.get(
+        HF_DAILY_PAPERS_URL,
+        params={"date": target_date, "limit": 100},
+        timeout=15,
+    )
+    res.raise_for_status()
+    return res.json()
+
+
 def fetch_top_daily_papers(target_date: str = None, top_n: int = 30) -> list[dict]:
     """
     HF Daily Papers에서 특정 날짜의 논문을 가져와 upvotes 기준 상위 top_n개를 반환한다.
@@ -93,21 +105,22 @@ def fetch_top_daily_papers(target_date: str = None, top_n: int = 30) -> list[dic
     Args:
         target_date: "YYYY-MM-DD" 형식. None이면 어제 날짜 사용
             (오늘 날짜는 아직 논문이 덜 쌓여있을 수 있어 어제 기준이 안전).
+            HF Daily Papers는 주말에 논문이 올라오지 않으므로, None일 때 어제가
+            비어 있으면 최대 MAX_LOOKBACK_DAYS일 전까지 하루씩 거슬러 올라가
+            논문이 있는 가장 최근 날짜를 쓴다 (월요일 -> 금요일 논문).
+            날짜를 명시하면 그 날짜만 조회한다.
         top_n: 상위 몇 개를 뽑을지.
 
     Returns:
         {hf_id, title, abstract, upvotes, url} 형태의 논문 리스트 (upvotes 내림차순).
     """
-    if target_date is None:
-        target_date = (date_cls.today() - timedelta(days=1)).isoformat()
-
-    res = requests.get(
-        HF_DAILY_PAPERS_URL,
-        params={"date": target_date, "limit": 100},
-        timeout=15,
-    )
-    res.raise_for_status()
-    items = res.json()
+    if target_date is not None:
+        items = _fetch_daily_items(target_date)
+    else:
+        for days_back in range(1, MAX_LOOKBACK_DAYS + 1):
+            items = _fetch_daily_items((date_cls.today() - timedelta(days=days_back)).isoformat())
+            if items:
+                break
 
     papers = []
     for item in items:

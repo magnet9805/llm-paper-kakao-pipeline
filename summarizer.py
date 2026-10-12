@@ -53,5 +53,18 @@ def _summarize_one(client: genai.Client, paper: dict) -> str:
 
 def summarize_papers(papers: list[dict]) -> list[dict]:
     """각 논문에 한국어 요약을 'summary' 필드로 추가해서 반환한다."""
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    client = genai.Client(
+        api_key=os.environ["GEMINI_API_KEY"],
+        # 503(high demand) 같은 일시적인 서버 에러는 잠깐 뒤 재시도하면 대개 성공하므로
+        # SDK 내장 재시도(지수 백오프)를 켠다. 429는 재시도 대상에서 뺀다 - 무료 티어 일일
+        # 한도 초과라 재시도해봐야 소용없고, 위의 SummaryQuotaExceededError로 바로 알려야 함.
+        http_options=types.HttpOptions(
+            retry_options=types.HttpRetryOptions(
+                attempts=5,
+                initial_delay=2.0,
+                max_delay=30.0,
+                http_status_codes=[500, 502, 503, 504],
+            )
+        ),
+    )
     return [{**p, "summary": _summarize_one(client, p)} for p in papers]
