@@ -1,216 +1,558 @@
 # 프로젝트 컨텍스트 (Claude Code용)
 
-세션 시작 시 자동으로 읽히는 파일. 작업 전에 반드시 참고할 것.
+이 파일은 Claude Code가 세션 시작 시 자동으로 읽는 컨텍스트 파일이다.
+설계 논의 내용을 요약해뒀으니, 작업 전에 반드시 참고할 것.
 
-## 프로젝트 개요
+## 프로젝트 목적
 
 관심 키워드에 맞는 최신 논문(멀티에이전트, RAG, LLM 기반 시계열예측, 추론기법 등)을
-매일 요약해 카카오톡으로 보내주는 "관심 논문 카톡 알리미" 웹 서비스.
+매일 요약해서 카카오톡으로 받아보는 "관심 논문 카톡 알리미" 서비스.
 
-- 스택: FastAPI, SQLite, Authlib(카카오 로그인), Gemini API(무료 티어), Docker, MCP, LangGraph
-- 설계 원칙: 인증·세션·DB 같은 주변부는 표준 라이브러리에 위임해 최소 구현하고,
-  리소스는 핵심 로직(수집·필터링·LLM 기반 요약/키워드 추출/에이전트)에 집중한다.
-- 패키지 관리는 **uv만** 사용 (`uv add`, `uv sync`, `uv run`). pip/requirements.txt 금지.
+개인용 스크립트(MVP)로 시작해, 회원가입/로그인 + 마이페이지 + 관심 키워드 관리 +
+카카오 발송을 갖춘 웹 서비스로 확장하는 것을 목표로 한다.
 
-## 로드맵
+기술적으로는 아래 스택을 단계적으로 도입하며, 각 단계는 이전 단계의 자연스러운
+다음 문제(배포 자동화, 재사용 가능한 도구화, 멀티에이전트 오케스트레이션, 품질
+평가, 인프라 확장)를 해결하는 방향으로 이어진다:
+FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
 
-1. [x] MVP: HF Daily Papers 수집 + 키워드 필터 + Gemini 요약 + 카카오 발송 (개인용 스크립트 `main.py`)
-2. [x] FastAPI + 카카오 소셜 로그인 + SQLite 멀티유저 (2-1 로그인, 2-2 키워드 CRUD,
-   2-3 사용자별 발송 `POST /api/send-now`, 2-4 LLM 대화형 키워드 추출, 2-5 홈 진입점 + 그룹별 on/off)
-3. [x] Docker 컨테이너화
-4. [x] 논문 검색을 MCP 서버로 분리
-5. [x] LangGraph로 Collector/Filter/Summarizer 그래프화
-6. [x] 요약 품질 평가 하네스 (ragas 대신 `evaluator.py` 직접 구현)
-7. [ ] **Agent System 고도화: 직무 갭 분석 에이전트** -> `docs/career_agent.md`
-8. [ ] AWS 배포 + 도메인(`aipaperkakao.kro.kr`) 연결 + 스케줄링 (EventBridge/ECS)
-9. [ ] (선택) vLLM 셀프호스팅으로 요약 모델 교체
-10. [ ] (선택) A2A로 Collector/Evaluator 에이전트 간 통신 분리
-11. [ ] (후순위) 핫한 논문 알리미 - 트렌드 소스 연동 + 전체 분야 논문 검색
+인증·세션·DB 같은 주변부 인프라는 표준 라이브러리에 위임해 최소한으로 구현하고,
+리소스는 핵심 로직(수집·필터링·LLM 기반 요약 및 키워드 추출 파이프라인)에
+집중하는 것을 설계 원칙으로 한다.
 
-## 논문 수집
+## 현재 단계: MVP (완료), 웹 서비스로 전환 준비 중
 
-- 소스: HF Daily Papers `https://huggingface.co/api/daily_papers?date=YYYY-MM-DD&limit=100`
-  (구글 스칼라는 공식 API 없음 + 크롤링 약관 위반 소지로 제외)
-- `upvotes` 상위 30개를 추린 뒤 키워드로 필터링. 한 클러스터라도 매칭되면 통과(OR),
-  여러 클러스터에 걸릴수록 랭킹 우선.
-- 기본 프리셋 클러스터(`collector.py`의 `KEYWORD_CLUSTERS`, 동등 가중치):
-  `time_series`(LLM 기반만, `require_all_of`로 시계열 단어 AND LLM 단어), `multi_agent`,
-  `rag`, `inference_efficiency`, `reasoning`
+- 수집(collector.py) -> 요약(summarizer.py) -> 발송(kakao_sender.py)을
+  main.py가 순서대로 실행하는 개인용 스크립트 버전은 완료됨
+- 지금부터는 이 로직을 멀티유저 웹 서비스 구조로 리팩터링하는 단계
+- 패키지 관리는 pip/venv가 아니라 **uv**를 사용 (`uv add`, `uv sync`, `uv run`)
 
-## 인증: 카카오 소셜 로그인 단일
+## 웹 서비스 컨셉
 
-이메일/비밀번호 가입은 없음. 카카오 OAuth 한 번으로 로그인과 메시지 발송 권한(`talk_message`)을
-동시에 얻는다. 라이브러리: Authlib + Starlette `SessionMiddleware`.
+로그인한 사용자가 자신의 관심 키워드를 설정하면, 그 키워드에 맞는 논문을
+카카오톡으로 매일 받아보는 서비스. 홈페이지 구성:
 
+- 로그인(카카오 소셜 로그인) / 내 정보(마이페이지)
+- 버튼 1: **관심 논문 알리미**
+  - 1-1. 관심 키워드 직접 입력
+  - 1-2. LLM과 대화하며 관심 키워드 찾기 (아래 상세 스펙 참고)
+- 버튼 2: **핫한 논문 알리미**
+  - AI 한정이 아니라 범사회적으로 최근 화제인 키워드 관련 논문을 다룸
+  - 트렌드 소스(뉴스 API, 실시간 검색어 등) → 관련 논문 검색이라는 2단계 파이프라인 필요
+  - 논문 검색 범위도 cs.* 카테고리에 한정하지 않고 전체 분야로 확장 필요
+  - 별도의 데이터 소스·매칭 로직이 필요해 난이도가 높으므로 로드맵 후순위로 배치
+
+마이페이지에서는 사용자가 설정해둔 관심 키워드(그룹 단위)를 조회/관리할 수 있어야 함.
+
+## 개발 로드맵
+
+1. [x] MVP: HF Daily Papers 수집 + 키워드 필터 + Gemini API(무료 티어) 요약 + 카카오 발송 (개인용 스크립트)
+2. [ ] FastAPI + 카카오 소셜 로그인 + DB(SQLite)로 멀티유저 구조 전환
+   - [x] 2-1. 카카오 소셜 로그인 (Authlib) - 회원가입/로그인 통합 (server.py, db.py)
+   - [x] 2-2. 관심 키워드 "직접 입력" 플로우 (그룹 생성/수정/삭제 + 키워드 추가/삭제 API +
+     마이페이지 조회/편집 UI) (`/api/keyword-groups` 전체 CRUD, `templates/` 프론트엔드 포함)
+   - [x] 2-3. 기존 collector.py를 사용자별 키워드로 파라미터화해서 카카오 발송까지 연결
+     (`POST /api/send-now` 수동 트리거, `sent_papers` 테이블로 사용자별 중복 방지,
+     DB의 사용자별 kakao 토큰으로 발송 - 자동 스케줄링은 로드맵 7번에서 붙일 예정)
+   - [x] 2-4. LLM 대화형 키워드 추출 (아래 스펙대로 구현, `keyword_chat.py` +
+     `POST /api/keyword-chat` + `templates/_chat_modal.html`)
+   - [x] 2-5. 홈 화면 진입점 분리 + 그룹별 발송 on/off (스펙에 없던 추가 개선,
+     아래 "홈 화면 진입점"·"그룹별 발송 on/off" 섹션 참고)
+3. [x] Docker 컨테이너화 (아래 "Docker 컨테이너화" 섹션 참고)
+4. [x] 논문 검색/조회 로직을 MCP 서버로 분리 (아래 "MCP 서버" 섹션 참고)
+5. [x] LangGraph로 Collector/Filter/Summarizer 노드 그래프화 (아래 "LangGraph 파이프라인" 섹션 참고)
+6. [x] RAGAS로 요약 품질 평가 하네스 구축 (실제로는 ragas 패키지를 포기하고 직접
+   구현 - 아래 "요약 품질 평가" 섹션 참고)
+7. [ ] AWS 배포 + 도메인 연결 + 스케줄링 (EventBridge/ECS)
+8. [ ] (선택) vLLM 셀프호스팅으로 요약 모델 교체
+9. [ ] (선택) A2A로 Collector/Evaluator 에이전트 간 통신 분리
+10. [ ] (후순위) 핫한 논문 알리미 - 트렌드 소스 연동 + 전체 분야 논문 검색
+
+한 번에 다 만들지 않고, 단계별로 점진적으로 리팩터링하는 방식으로 진행 중.
+
+## 논문 수집 소스: Hugging Face Daily Papers
+
+- API: `https://huggingface.co/api/daily_papers?date=YYYY-MM-DD&limit=100`
+- 구글 스칼라는 공식 API가 없고 크롤링이 이용약관 위반 소지가 있어 사용하지 않기로 함
+- `upvotes` 필드 기준으로 그날의 상위 30개(top_n)를 추린 뒤 키워드로 필터링
+
+## 관심 키워드 클러스터 (직접 입력 시 기본 프리셋으로 활용, collector.py의 KEYWORD_CLUSTERS)
+
+아래 5개 클러스터로 구성 (동등 가중치, 우선순위 없음):
+
+1. **time_series**: LLM 기반 시계열예측만 (통계/전통 ML 시계열은 배제)
+   - 특수 로직: `require_all_of`로 "시계열 단어" AND "LLM 단어"가 둘 다 있어야 통과
+2. **multi_agent**: 멀티에이전트, A2A(agent2agent), tool use 등
+3. **rag**: retrieval-augmented generation, hybrid retrieval 등
+4. **inference_efficiency**: vLLM 관련 - speculative decoding, KV cache, quantization 등
+5. **reasoning**: chain-of-thought, test-time scaling 등
+
+한 클러스터라도 매칭되면 통과(OR), 여러 클러스터에 걸릴수록 랭킹에서 우선순위를 줌.
+웹 서비스에서는 이 클러스터들을 "직접 입력" 화면의 추천 프리셋으로 노출하는 것도 고려.
+
+## 인증 방식: 카카오 소셜 로그인 하나로 통합
+
+이메일/비밀번호 회원가입은 만들지 않기로 함. 이유:
+- 이 서비스는 어차피 카카오톡으로 메시지를 보내야 하므로, 카카오 로그인(OAuth)을
+  인증 수단으로 쓰면 "로그인"과 "메시지 발송 권한 획득"이 한 번의 OAuth 플로우로 동시에 끝남
+- 비밀번호 저장/해싱/재설정 같은 인증 자체의 번거로운 부분이 통째로 사라짐
+- 인증은 표준 라이브러리에 위임하고, 핵심 로직(LLM 기반 파이프라인)에 집중하기 위함
+
+**사용 라이브러리:**
+- OAuth 플로우: **Authlib**
+- 세션 관리: FastAPI/Starlette 내장 `SessionMiddleware` (쿠키 기반)
+
+**엔드포인트:**
 ```
-GET  /auth/kakao/login     카카오로 리다이렉트
-GET  /auth/kakao/callback  토큰 교환 -> users upsert -> 세션 쿠키
-POST /auth/logout
-GET  /auth/me
+GET  /auth/kakao/login     → 카카오 로그인 페이지로 리다이렉트
+GET  /auth/kakao/callback  → 인증 코드 받아서 토큰 교환, users 테이블에 upsert, 세션 쿠키 발급
+POST /auth/logout          → 세션 쿠키 삭제
+GET  /auth/me              → 현재 로그인한 사용자 정보 (JSON API)
 ```
 
-**Authlib + 카카오 함정 (실전 확인):**
-- `oauth.register(...)`에 `token_endpoint_auth_method="client_secret_post"` 필수.
-  기본값(Basic 헤더)이면 `invalid_client: Not exist client_id [null]`.
-- scope에 `profile_nickname profile_image talk_message`를 명시해야 한다. 빠지면 로그인은
-  되는데 닉네임/프로필이 조용히 `null`.
+`signup`이 따로 없음 - 콜백에서 처음 오는 `kakao_id`면 새로 생성, 이미 있으면 로그인 처리.
 
-## DB (SQLite)
+기존 `kakao_auth_helper.py`(개인용 1회성 수동 인증 스크립트)는 이 플로우로 대체됨.
+`kakao_sender.py`의 토큰 자동 갱신 로직(refresh_token 사용)은 그대로 재사용 가능
+(단, `.env`가 아니라 DB의 사용자별 토큰을 읽어오도록 수정 필요).
+
+**Authlib + 카카오 연동 시 겪은 함정 (공식 문서에 없고 실전에서 확인된 내용):**
+- `oauth.register(...)`에 `token_endpoint_auth_method="client_secret_post"`를 명시해야 함.
+  기본값(`client_secret_basic`, client_id/secret을 HTTP Basic 헤더로 전송)을 쓰면 카카오
+  토큰 엔드포인트가 `invalid_client: Not exist client_id [null]` 에러를 반환한다 - 카카오는
+  client_id/secret을 폼 body 파라미터로만 받는다.
+- 닉네임/프로필 사진은 "선택 동의" 항목이라, `client_kwargs={"scope": "..."}`에
+  `profile_nickname profile_image`를 명시적으로 넣어야 응답에 채워진다. (마찬가지로
+  카카오톡 메시지 전송 권한은 `talk_message`를 넣어야 함 - 위 참고.) 안 넣으면 로그인은
+  되지만 `nickname`/`profile_image_url`이 조용히 `null`로 온다.
+
+## DB 스키마 (SQLite, 로컬 프로토타입 기준)
 
 ```sql
-users(id, kakao_id UNIQUE, nickname, profile_image_url,
-      kakao_access_token, kakao_refresh_token, kakao_token_expires_at, created_at)
-keyword_groups(id, user_id -> users, title,
-               source CHECK IN ('manual','llm_chat'), is_active DEFAULT 1, created_at)
-keywords(id, group_id -> keyword_groups ON DELETE CASCADE, keyword_text)
-sent_papers(id, user_id -> users, hf_id, sent_at, UNIQUE(user_id, hf_id))  -- 사용자별 중복 발송 방지
+-- 카카오 로그인이 곧 회원가입이므로 password 필드 없음.
+-- 카카오 access/refresh token도 여기 같이 저장 (별도 kakao_accounts 테이블 불필요).
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    kakao_id TEXT UNIQUE NOT NULL,
+    nickname TEXT,
+    profile_image_url TEXT,
+    kakao_access_token TEXT NOT NULL,
+    kakao_refresh_token TEXT NOT NULL,
+    kakao_token_expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE keyword_groups (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    title TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('manual', 'llm_chat')),
+    is_active INTEGER NOT NULL DEFAULT 1,  -- 그룹별 발송 on/off (아래 섹션 참고)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE keywords (
+    id INTEGER PRIMARY KEY,
+    group_id INTEGER NOT NULL REFERENCES keyword_groups(id) ON DELETE CASCADE,
+    keyword_text TEXT NOT NULL
+);
+
+-- 개인용 스크립트의 전역 seen_papers.json과 달리, 사용자마다 "이미 보낸 논문"이
+-- 달라야 해서 사용자별로 발송 이력을 남긴다.
+CREATE TABLE sent_papers (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    hf_id TEXT NOT NULL,
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, hf_id)
+);
 ```
 
-- SQLite는 연결마다 `PRAGMA foreign_keys = ON`을 해야 CASCADE가 동작한다 (`db.py`의 `get_connection()`에 반영됨).
-- 컬럼 추가: SCHEMA에 새 컬럼을 넣고 `db.py`의 `_migrate()`에 조건부 `ALTER TABLE ... ADD COLUMN`을 추가하는
-  패턴을 재사용한다. **CHECK 제약은 ALTER로 못 바꾼다** (테이블 재생성 필요).
-- `DB_PATH` 환경변수로 경로 오버라이드 (기본 `app.db`, Docker에서는 `/app/data/app.db`).
+> SQLite는 `ON DELETE CASCADE`를 기본적으로 무시한다 - 연결마다 `PRAGMA foreign_keys = ON`을
+> 실행해야 실제로 동작한다 (`db.py`의 `get_connection()`에 이미 반영되어 있음).
 
-## API (구현 완료, 전부 `require_login` + `WHERE user_id = ?`로 소유권 확인)
+> `is_active` 컬럼은 2-5에서 추가됨. `CREATE TABLE IF NOT EXISTS`는 이미 만들어진 테이블에
+> 새 컬럼을 넣어주지 않으므로, `db.py`의 `init_db()`가 `_migrate()`를 통해 기존 `app.db`에
+> `ALTER TABLE ... ADD COLUMN`을 1회성으로 실행해 보정한다 (컬럼이 이미 있으면 아무 것도
+> 안 함). 앞으로 스키마에 컬럼을 더 추가할 때도 이 패턴(SCHEMA에 새 컬럼 추가 + `_migrate()`에
+> 조건부 ALTER 추가)을 재사용하면 된다.
 
+**관심 키워드 그룹 API 엔드포인트 (구현 완료, `server.py`):**
 ```
-POST   /api/keyword-groups                    그룹 생성 (title, keywords[], source)
-GET    /api/keyword-groups                    내 그룹 목록
-PATCH  /api/keyword-groups/{id}               제목 수정
-PATCH  /api/keyword-groups/{id}/active        발송 on/off ({is_active: bool})
-DELETE /api/keyword-groups/{id}               삭제 (키워드 CASCADE)
-POST   /api/keyword-groups/{id}/keywords      키워드 추가
-DELETE /api/keywords/{id}                     키워드 삭제
-POST   /api/keyword-chat                      LLM 대화 한 턴 (무상태, 프론트가 history 전달)
-POST   /api/send-now                          지금 논문 받아보기 (수동 트리거)
+POST   /api/keyword-groups                       # 그룹 생성 (title, keywords[], source) - "직접 입력"은 source="manual"(기본값), 대화형은 source="llm_chat"
+GET    /api/keyword-groups                        # 내 그룹 목록 조회 (마이페이지용)
+PATCH  /api/keyword-groups/{group_id}              # 그룹 제목 수정
+PATCH  /api/keyword-groups/{group_id}/active       # 그룹별 발송 on/off 토글 (body: {is_active: bool})
+DELETE /api/keyword-groups/{group_id}              # 그룹 전체 삭제 (키워드도 CASCADE로 같이 삭제)
+POST   /api/keyword-groups/{group_id}/keywords     # 그룹에 키워드 하나 추가
+DELETE /api/keywords/{keyword_id}                  # 키워드 하나 삭제
+POST   /api/keyword-chat                           # LLM 대화형 키워드 찾기 한 턴 (아래 섹션 참고)
 ```
+모든 엔드포인트는 `require_login` 의존성으로 로그인을 요구하고, 그룹/키워드가 요청한
+사용자 소유인지 SQL의 `WHERE user_id = ?` 절로 확인한다 (남의 그룹 id를 넣어도 404).
 
-## 사용자별 발송
+## 사용자별 논문 발송 (구현 완료, `POST /api/send-now`)
 
-개인용 스크립트의 collector/summarizer/kakao_sender를 재사용하고 "사용자별로 다른 부분"만 바꿨다:
+개인용 스크립트(`main.py`)의 collector/summarizer/kakao_sender를 그대로 재사용하되,
+"사용자별로 다른 부분"만 바꿔치기하는 방식으로 연결했다:
 
-| 개인용 (`main.py`) | 웹 (`server.py`) |
-|---|---|
-| 고정 `KEYWORD_CLUSTERS` | 사용자의 활성 키워드 그룹 (그룹 1개 = 클러스터 1개, `_clusters_from_keyword_groups()`) |
-| `seen_papers.json` | `sent_papers` 테이블 |
-| `kakao_token.json` | `users` 테이블의 토큰 (`refresh_user_access_token`) |
+| 개인용 스크립트 (main.py)              | 웹 서비스 (server.py의 send-now)                     |
+|----------------------------------------|-------------------------------------------------------|
+| `.env`의 고정 `KEYWORD_CLUSTERS`       | 이 사용자의 `list_keyword_groups()` 결과로 만든 클러스터 (그룹 1개 = 클러스터 1개, 그룹 제목이 곧 클러스터 이름) |
+| `seen_papers.json` (전역 파일)         | `sent_papers` 테이블 (사용자별 발송 이력)             |
+| `kakao_token.json` (전역 파일)         | `users` 테이블의 이 사용자 kakao 토큰 컬럼            |
 
-`is_active=False` 그룹은 발송 대상에서만 빠지고 삭제되지는 않는다. 자동 스케줄링은 로드맵 8번에서 붙인다.
+이 매핑 덕분에 `collector.py`/`kakao_sender.py`는 각각 `clusters`/`seen_ids`,
+`access_token`을 인자로 받는 형태로만 살짝 파라미터화됐고, 실제 수집/필터링/요약/
+발송 로직 자체는 손대지 않았다. `kakao_sender.py`에는 파일 기반 경로
+(`_refresh_access_token`, `send_daily_papers` - main.py용)와 DB 기반 경로
+(`refresh_user_access_token`, `send_papers` - server.py용)가 공존한다.
+
+지금은 마이페이지의 "지금 논문 받아보기" 버튼으로 수동 트리거해야 한다. 매일 자동
+실행되는 스케줄링은 로드맵 7번(AWS EventBridge/ECS)에서 붙일 예정.
+
+`_clusters_from_keyword_groups()`는 `is_active=False`로 꺼둔 그룹을 클러스터 구성에서
+제외한다 - 관심 키워드로 등록은 해뒀지만 오늘은 다른 그룹의 논문만 받고 싶은 경우를 위한
+기능(2-5). 그룹/키워드 자체는 지워지지 않고, 발송 대상에서만 빠진다.
 
 ## 프론트엔드 (서버 렌더링, `templates/`)
 
-SPA 없이 Jinja2 + 바닐라 JS (프론트는 최소 구성이 설계 원칙).
+React/Vue 같은 SPA 프레임워크는 쓰지 않고, FastAPI의 `Jinja2Templates`로 서버에서
+HTML을 직접 렌더링한다 - 이 프로젝트의 리소스는 백엔드/LLM 파이프라인에 집중하는 게
+설계 원칙이라, 프론트는 최소 구성으로 감. 상태가 필요한 부분(모달 열기/닫기, 키워드
+칩 편집)만 바닐라 JS로 처리하고, 화면 전환은 그냥 서버 라우트 이동.
 
-- `base.html` 공통 레이아웃 / `index.html` 홈 / `mypage.html` 그룹 관리
-- `_chat_modal.html`, `_manual_modal.html`: 홈과 마이페이지가 `{% include %}`로 공유하는 팝업.
-  페이지별 후처리만 `onGroupRegistered(group)` 훅으로 분리 (새 진입점이 늘어도 이 패턴 재사용).
-- 홈 진입점: "관심 키워드 등록"(직접 입력 팝업), "AI 기반 관심 키워드 찾기"(대화 팝업). 둘 다 페이지 이동 없이 팝업.
-- 마이페이지 편집 UX: 수정 아이콘 -> 모달. 키워드 `✕` 삭제는 confirm 후 즉시 API 반영,
-  `+` 추가는 알약형 입력칸 + `✓`/`✕`. 제목 변경만 [저장]이 필요. 이 패턴은 대화형 등록 확인 팝업에도 재사용됨.
+**파일 구성:**
+- `templates/base.html`: 공통 레이아웃. 상단 네비(홈/마이페이지/로그아웃), 전역 CSS
+  변수(`--kakao`, `--ink`, `--radius` 등), `logout()` 함수를 여기 한 곳에 둠.
+- `templates/index.html`: 홈 화면 (`GET /`). 전체 화면 히어로 섹션 - 실제 사진 대신
+  그라디언트 배경 + 인라인 SVG(문서+카카오톡 말풍선 모양 일러스트)로 "관심 논문을
+  카카오톡으로 받는다"는 컨셉을 표현함 (외부 이미지 URL에 의존하지 않아 깨질 일이 없음).
+  로그인 시 "관심 키워드 등록"/"AI 기반 관심 키워드 찾기" 두 버튼을 보여줌 (아래
+  "홈 화면 진입점" 섹션 참고).
+- `templates/mypage.html`: 마이페이지 (`GET /mypage`). 키워드 그룹 목록 + 그룹별
+  수정/삭제 아이콘 버튼(연필/휴지통, 그룹 박스 우측) + "+ 새 그룹 등록" 토글 버튼 +
+  그룹별 발송 on/off 스위치.
+- `templates/_chat_modal.html`, `templates/_manual_modal.html`: 키워드 등록 팝업
+  (대화형/직접입력). `index.html`과 `mypage.html` 양쪽에서 `{% include %}`로 재사용하는
+  공유 partial (아래 "홈 화면 진입점" 섹션 참고).
 
-## LLM 대화형 키워드 추출 (`keyword_chat.py`, 구현 완료)
+**마이페이지 편집 UX (중요 - 2-4에서도 재사용할 패턴):**
+- [수정] 아이콘 클릭 → 페이지 안에서 인라인으로 바뀌지 않고 **팝업(모달)**이 뜸.
+  모달 안에서 제목 입력창 + 키워드 칩 목록을 편집.
+- 키워드 삭제: 칩 옆 `✕` 클릭 → "삭제하시겠습니까?" confirm() → 확인 시 즉시 DELETE
+  API 호출 + "삭제되었습니다" alert(). 이 삭제/추가는 모달의 [저장]과 별개로 즉시
+  서버에 반영됨 (제목 변경만 [저장]을 눌러야 반영).
+- 키워드 추가: 목록 끝의 `+` 클릭 → 기존 키워드 칩과 똑같은 모양(회색 알약)의 칸이
+  텍스트 입력 가능한 상태로 바뀌고, 오른쪽에 `✓`(확정) - `✕`(취소) 순서로 버튼이 붙음.
+  엔터 또는 `✓` 클릭으로 확정. 공백/특수문자만 입력한 경우는 무시(`isValidKeywordText`).
+  [저장] 버튼을 누르면, `✓`를 안 눌렀어도 입력 중이던 유효한 텍스트가 있으면 그것도
+  같이 커밋한다 (깜빡하고 저장만 누르는 경우를 위한 배려).
+- 모달에서 바뀐 내용(제목/키워드)은 모달을 닫기 전에 뒤에 깔린 마이페이지 카드에도
+  바로 반영됨 (새로고침 불필요) - `groups_json`으로 서버가 내려준 데이터를 JS
+  `groupsData` 배열에 캐싱해두고 그걸 기준으로 모달/메인 목록을 둘 다 다시 그림.
+- **이 x-삭제(confirm 팝업) / +-추가(체크·엑스 버튼) 패턴은 2-4(LLM 대화형 키워드
+  추출)의 등록 확인 팝업 키워드 편집(`_chat_modal.html`의 `renderConfirmKeywords()`)에
+  그대로 재사용됨.**
+- "+ 새 그룹 등록"은 상시 노출된 폼이 아니라, 클릭 전엔 점선 테두리 버튼(호버 시
+  테두리 강조)만 보이고 클릭하면 폼이 펼쳐지는 방식.
 
-- 모델 `gemini-flash-latest`, function calling `propose_keyword_group(title, keywords[5~8])`.
-- 시스템 프롬프트: 대화 초반 1~2턴은 제안하지 말 것, keywords는 **영어**로 (논문 원문이 영어).
-- 흐름: 멀티턴 대화 -> tool_use로 제안 -> 키워드 칩(토글 선택) -> [선택] -> 등록 확인 팝업
-  (제목 수정 가능, [취소]/[등록]) -> **[등록] 시점에만** `POST /api/keyword-groups` 호출.
-- 카드 상태 3가지: active / registered(✓ 등록됨) / dismissed(선택 없이 다음 메시지를 보내면 회색 + 비활성).
-- 한 세션에서 여러 그룹 등록 가능 (등록 후에도 모달은 닫히지 않음). 안내 문구는 프론트 고정 문구.
+## LLM 대화형 키워드 추출 - 확정된 스펙 (구현 완료)
 
-## Docker
+아래 스펙대로 `keyword_chat.py`(Gemini function calling) + `POST /api/keyword-chat`
++ `templates/_chat_modal.html`로 구현 완료됨. 모델은 `gemini-flash-latest`(무료 티어),
+시스템 프롬프트에서 "대화 초반 1~2턴은 섣불리 제안하지 말 것"과 "keywords는 반드시
+영어로 작성할 것"(논문 원문이 영어라 매칭되려면 영어 표현이어야 함)을 명시한다.
+백엔드는 무상태 - 대화 기록을 서버에 저장하지 않고 프론트가 매 턴 전체 history를
+다시 보낸다.
 
-`Dockerfile`(베이스 `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`), `.dockerignore`, `docker-compose.yml`.
+### 전체 흐름
 
-- 의존성 레이어 캐싱: `pyproject.toml`/`uv.lock`만 먼저 COPY -> `uv sync --locked --no-install-project`.
-- `app-data` 볼륨을 `/app/data`에 마운트, `DB_PATH=/app/data/app.db`.
-- `.env`는 이미지에 COPY 금지, `env_file`로 실행 시점에만 주입.
-- 포트 8000:8000 -> 카카오 Redirect URI는 로컬과 동일 (`http://localhost:8000`).
+1. "나의 관심 키워드 찾기" 버튼 클릭 → 대화형 모달 팝업
+2. AI 첫 메시지: "AI에 관하여 어떤 내용들에 관심이 있으신가요? 관심 키워드를 함께 찾아보아요."
+3. 사용자와 대화 진행 (멀티턴)
+4. 모델이 충분한 정보가 모였다고 판단하면 **function calling**으로 키워드 그룹을 제안
+   (섣불리 첫 턴부터 제안하지 않도록 시스템 프롬프트에 명시할 것)
+5. 제안된 키워드들이 칩(chip) 버튼으로, 그 아래 "선택" 버튼과 함께 표시됨
+6. 사용자가 칩을 클릭 = 로컬 상태에서 선택/해제 토글만 (아직 API 호출 없음)
+7. 하나 이상 선택되면 "선택" 버튼 활성화. "전체 선택"은 모든 칩을 한 번에 선택 상태로
+   토글하는 역할 (결국 개별/전체 모두 "선택" 버튼을 눌러야 다음 단계로 진행되는
+   동일한 흐름으로 통일됨)
+8. "선택" 버튼 클릭 → 등록 확인 팝업 표시:
+   - 최상단: title 입력창 (LLM이 생성한 제목이 기본값으로 들어있으나 사용자가 직접 수정 가능)
+   - 중간: 방금 선택한 키워드들 표시
+   - 우측 하단: [취소] [등록] 버튼
+9. **취소**: 팝업만 닫힘, 칩 선택 상태 유지, 채팅으로 복귀 (재시도 가능)
+10. **등록**: 이 시점에만 실제로 `POST /api/keyword-groups` 호출하여 DB에 저장
+11. 사용자가 아무것도 선택하지 않고 다음 메시지를 보내면, 직전 키워드 카드는
+    자동으로 비활성화(회색 처리 + 모든 버튼 disabled) 처리됨
+12. 한 대화 세션에서 여러 그룹을 등록할 수 있도록 열어둠 (모달은 등록 후에도
+    자동으로 닫히지 않고, 사용자가 명시적으로 "닫기"를 눌러야 닫힘)
 
-## MCP 서버 (`mcp_server.py`)
+### 카드 상태 3가지
 
-`collector.py`의 `fetch_top_daily_papers`, `filter_by_keywords`를 도구 2개로 노출:
-`list_daily_papers`, `search_papers(keyword_groups, ...)` (그룹 사이 AND, 그룹 안 OR).
+| 상태 | 시각적 표시 | 버튼 |
+|---|---|---|
+| active | 일반 | 칩 클릭 가능 |
+| registered | ✓ 등록됨 뱃지 | 전부 비활성화 |
+| dismissed | 회색/흐림 | 전부 비활성화 |
 
-- **설계 판단**: MCP는 "이 앱 바깥"에서 재사용하기 위한 별도 진입점이다. `server.py`와
-  `pipeline_graph.py`는 `collector.py`를 **직접 import**한다 (같은 프로세스에서 프로토콜 왕복 불필요).
-- **`mcp==2.0.0` 주의**: `from mcp.server.mcpserver import MCPServer` (구 `fastmcp.FastMCP`는 없음).
-  옛 이름으로 되돌리지 말고, 설치된 버전을 직접 확인할 것.
-- `search_papers`는 `seen_ids`에 빈 집합을 명시적으로 넘긴다 (안 그러면 로컬 `seen_papers.json`을 읽음).
-- 실행: `uv run mcp dev mcp_server.py` (Inspector), `uv run python mcp_server.py` (stdio).
-- 테스트 함정: `call_tool` 결과는 `.content`가 아니라 `.structured_content["result"]`를 볼 것.
+등록되지 않은 카드를 계속 활성 상태로 남겨두지 않는 이유: 세션/DB 부하 방지.
+등록 API는 사용자가 명시적으로 "등록" 버튼을 눌렀을 때만 호출된다.
 
-## LangGraph 파이프라인 (`pipeline_graph.py`)
+### Function Calling 스키마 (초안)
 
-`collector -> filter -> summarizer` 선형 `StateGraph`. `main.py`와 `/api/send-now` 모두
-`run_pipeline(target_date, top_n, clusters, seen_ids, papers_per_send)` 하나로 호출한다.
-State(`PipelineState`): 입력(`target_date, top_n, clusters, seen_ids, papers_per_send`) +
-출력(`raw_papers, filtered_papers, summarized_papers`). 필터 통과 논문이 0편이면 summarizer는 Gemini를 호출하지 않는다.
-테스트는 `papers_per_send=0`(그래프 연결만) -> `=1`(실제 API 1건)로 할당량을 아낀다.
+```python
+tools = [{
+    "name": "propose_keyword_group",
+    "description": "사용자와의 대화에서 관심 주제가 충분히 파악됐을 때, 구조화된 키워드 그룹을 제안한다. 아직 충분히 파악되지 않았다면 이 도구를 호출하지 말고 계속 대화로 질문할 것.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "이 키워드 그룹의 대표 제목"},
+            "keywords": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "논문 필터링에 쓸 구체적 키워드 5~8개"
+            }
+        },
+        "required": ["title", "keywords"]
+    }
+}]
+```
 
-## 요약 품질 평가 (`evaluator.py`)
+안내 문구("마음에 드신다면 관심 키워드로 등록할 수 있습니다!")는 모델이 매번
+다르게 생성하게 두지 않고, tool_use가 감지되면 프론트엔드에서 고정 문구로
+붙이는 방식으로 결정함 (UI 일관성 때문).
 
-**ragas는 다시 시도하지 말 것.** (1) `ragas`가 `langchain_community.chat_models.vertexai`를 무조건
-import하는데 최신 `langchain-community`에 없고, 구버전으로 고정하면 `langgraph`의 `langchain-core>=1.4.7`과
-충돌해 uv가 해결 불가. (2) 핵심 지표가 "질문->검색->답변" RAG용이라 검색 단계가 없는 이 파이프라인과 안 맞음.
+### API 엔드포인트 (키워드 챗 관련, 딱 2개)
 
-대안: Gemini를 LLM-as-judge로 쓰는 직접 구현. 기준 `faithful`(지어낸 내용 없음, LLM),
-`relevant`(핵심 기여 반영, LLM), `concise`(150자 이하, `len()`으로 결정론적).
-`uv run python evaluator.py`로 3편 샘플 채점 (무료 티어 20건/일이라 샘플을 작게 유지).
-충실한 요약 vs 환각 요약 쌍으로 판별력을 검증함.
+```
+POST /api/keyword-chat        # 대화 한 턴 (LLM 응답 + 필요시 tool_use로 제안). 백엔드는 무상태로, 프론트가 history를 매번 전달
+POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywords[])
+```
 
-## 직무 갭 분석 에이전트 (로드맵 7)
+## 홈 화면 진입점 (2-5)
 
-상세 설계(State, Planner 라우팅, 도구, 스키마, API, 평가, 이력서 개인정보 처리)는
-**`docs/career_agent.md`**에 있다. 구현 전에 반드시 읽을 것. 아래는 핵심 요약.
+원래 스펙(위 "웹 서비스 컨셉")대로 "관심 키워드 직접 입력"과 "LLM과 대화하며 찾기"를
+홈 화면에서 바로 시작할 수 있어야 한다는 요구를 반영해, 로그인 후 홈 화면에 마이페이지로
+이동하는 링크 하나 대신 두 버튼을 둔다:
+- **관심 키워드 등록** (`openManualModal()`) - `_manual_modal.html`의 팝업 (제목 +
+  쉼표 구분 키워드 입력, `source` 없이 `POST /api/keyword-groups` 호출 → 기본값 manual)
+- **AI 기반 관심 키워드 찾기** (`openChatModal()`) - `_manual_modal.html`이 아니라
+  `_chat_modal.html`의 대화형 팝업. 히어로 배경의 보라색 톤과 어울리는 그라디언트
+  버튼(`.btn-ai`)으로 카카오 노란 버튼과 구분함.
 
-- **목적**: AI 직무 준비 사용자의 희망 직무 채용공고 요구 스킬 vs 보유 스킬(+사용 증거 신뢰도)을 비교해
-  보완 스킬을 찾고, 이를 기존 관심 키워드 그룹(`POST /api/keyword-groups`, `source="career_gap"`)으로 연결한다.
-- **기존 논문 파이프라인(`pipeline_graph.py`)은 변경하지 않는다.** 그래프/State/파일을 분리한다.
-- **위치**: 전용 페이지 `/career` + 홈 세 번째 버튼 + 마이페이지 커리어 섹션. 기존 `_chat_modal.html`에 넣지 않는다.
-- **확정 결정**: 이력서 업로드는 선택 / 스킬은 증거 슬롯(project, role, how, outcome)으로 신뢰도 산정.
-- **구조**: Planner(규칙 기반 라우팅, LLM은 발화 해석에만) + ① 상황 파악 -> ② 공고 검색 -> ③ 갭 분석.
-  `gap_score = demand * (1 - credit)`, 갭 계산은 LLM 없이 집계.
-- **데이터**: 사람인/워크넷 공식 API만 사용(크롤링 금지), 스킬 추출은 별칭 사전 기반 규칙이 기본(LLM은 일일 상한 내 보강),
-  임베디드 벡터 저장소 + 로컬 임베딩. 의존성 추가 전 `uv`가 `langgraph`와 충돌 없이 풀리는지 확인.
-- **개인정보**: 이력서 원문 저장 금지, 이메일/전화 마스킹, 외부 LLM 전송 고지, 커리어 데이터 전체 삭제 기능.
-- **평가**: ragas 없이 직접 구현, 되돌아가기 시나리오 4개를 궤적 평가 테스트로 사용.
-- **주의**: `keyword_groups.source`에 `'career_gap'`을 넣으려면 CHECK 제약 때문에 테이블 재생성 마이그레이션이 필요
-  (싫으면 `'llm_chat'` 재사용).
+둘 다 마이페이지로 페이지 이동하지 않고 홈 화면 위에 팝업으로 뜬다 - 대화형 키워드
+찾기 UI(칩 선택, 카드 3상태, 등록 확인 팝업)는 마이페이지에서도 똑같이 쓰이므로,
+`templates/_chat_modal.html`(대화 모달 + 등록 확인 팝업 + 칩/키워드 칩 편집 관련 CSS·JS
+전체)을 별도 partial로 분리해서 `index.html`과 `mypage.html` 양쪽에서 `{% include %}`
+한다. 두 페이지가 서로 다르게 처리해야 하는 부분(등록 완료 후 무엇을 할지)만 각
+페이지가 정의하는 `onGroupRegistered(group)` 훅으로 분리했다:
+- `mypage.html`: `appendNewGroupToMainList(group)`으로 새로고침 없이 목록에 바로 추가
+- `index.html`: 그룹 목록이 없으므로 완료 안내 alert만 띄움
 
-## 협업 규칙
+이 분리 패턴(공통 UI는 partial, 페이지별 후처리는 훅)은 앞으로 키워드 등록 진입점이
+늘어나도(예: 로드맵 후순위의 "핫한 논문 알리미") 그대로 재사용할 수 있다.
 
-- `main`은 PR로만 변경. 브랜치는 사람 단위 (`feat/...`).
-- 충돌이 잦은 파일은 한 PR에서 작게, 먼저 머지된 쪽에 맞춰 rebase: `server.py`, `db.py`,
-  `pyproject.toml`/`uv.lock`, `CLAUDE.md`.
-- 새 모듈은 인터페이스(함수 시그니처/State)를 먼저 합의한 뒤 구현한다.
-- 설계 결정이 바뀌면 코드 PR과 별개로 이 파일(또는 `docs/`)을 수정하는 PR을 올린다.
+## 그룹별 발송 on/off (2-5)
+
+관심 키워드로 그룹을 등록은 해뒀지만, 어떤 날은 그중 일부 그룹의 논문만 받고 싶을 수
+있다는 요구를 반영. `keyword_groups.is_active`(기본값 1) 컬럼을 추가하고, 마이페이지의
+각 그룹 카드 옆에 on/off 스위치를 둔다.
+
+- 스위치는 카드(`.group`) **안이 아니라 밖**, `.group-row` 컨테이너의 우측에 위치함 -
+  "그룹 자체를 편집하는 조작"(수정/삭제, 카드 안의 아이콘)과 "발송 대상 여부"(카드 밖)를
+  시각적으로 분리하기 위함.
+- 꺼도(`is_active=False`) 그룹/키워드 자체는 삭제되지 않고 그대로 남는다. 다만
+  `server.py`의 `_clusters_from_keyword_groups()`가 `POST /api/send-now`의 클러스터를
+  구성할 때 꺼진 그룹을 제외한다 - 즉 "발송 대상에서만 빠진다".
+- API: `PATCH /api/keyword-groups/{group_id}/active` (body: `{"is_active": bool}`).
+
+## Docker 컨테이너화
+
+웹 서비스(`server.py`)를 컨테이너로 띄울 수 있게 `Dockerfile`, `.dockerignore`,
+`docker-compose.yml`을 추가했다 (`main.py` 개인용 스크립트는 컨테이너화 대상이
+아니고, 필요하면 같은 이미지 안에서 커맨드만 바꿔 1회성으로 실행한다).
+
+- **베이스 이미지**: `ghcr.io/astral-sh/uv:python3.12-bookworm-slim` - uv가 이미
+  설치돼 있어 별도로 `pip install uv`할 필요가 없다. 이 프로젝트는 pip/venv 대신
+  uv만 쓰기로 했으므로(코딩 컨벤션 참고) 컨테이너 안에서도 동일하게 `uv sync`/
+  `uv run`으로 의존성을 관리한다.
+- **레이어 캐싱**: `pyproject.toml`/`uv.lock`만 먼저 COPY해서 `uv sync --locked
+  --no-install-project`를 한 번 돌리고, 그 다음에야 나머지 소스를 COPY한다 -
+  소스 코드만 바뀐 재빌드에서는 의존성 설치 레이어가 캐시돼 재사용된다.
+  `--locked`는 `uv.lock`이 `pyproject.toml`과 어긋나 있으면 빌드를 실패시켜서,
+  로컬과 다른 버전이 컨테이너에 들어가는 걸 막아준다.
+- **SQLite 영속성**: 컨테이너를 재생성(재빌드, `docker compose down/up`)해도
+  `app.db`가 사라지면 안 되므로, `db.py`의 `DB_PATH`를 `os.environ.get("DB_PATH",
+  "app.db")`로 바꿔 환경변수로 오버라이드 가능하게 했다. `docker-compose.yml`은
+  `app-data`라는 이름의 볼륨을 `/app/data`에 마운트하고 `DB_PATH=/app/data/app.db`를
+  주입한다 - 로컬 실행(`uv run uvicorn ...`)에서는 이 환경변수가 없으니 그대로
+  `app.db`(프로젝트 루트)를 쓴다.
+- **비밀값**: `.env`는 이미지에 절대 COPY하지 않는다(`.dockerignore`에 명시) -
+  `docker-compose.yml`의 `env_file: .env`로 실행 시점에만 컨테이너 환경변수로
+  주입한다. `server.py`의 `load_dotenv()`는 `.env` 파일이 없어도 에러 없이
+  그냥 넘어가므로, 이미 주입된 환경변수를 덮어쓰지 않고 그대로 쓴다.
+- **포트/카카오 Redirect URI**: 호스트:컨테이너 포트 매핑을 8000:8000으로 맞춰서,
+  로컬에서 `uv run uvicorn`으로 띄웠을 때와 접속 주소(`http://localhost:8000`)가
+  동일하다 - 카카오 개발자 콘솔의 Redirect URI를 Docker용으로 새로 등록할 필요 없음.
+
+## MCP 서버
+
+`collector.py`의 논문 검색/조회 로직(`fetch_top_daily_papers`, `filter_by_keywords`)을
+`mcp_server.py`로 노출했다. 목적은 프로젝트 목적 섹션에 적어둔 스택 도입 이유 그대로 -
+Docker(배포 자동화) 다음 문제인 **"재사용 가능한 도구화"**: 지금은 이 논문 검색
+기능이 `server.py`가 import해서 쓰는 파이썬 함수로만 존재하는데, MCP로 감싸두면
+Claude Desktop 같은 임의의 MCP 클라이언트나 로드맵 5번(LangGraph)의 Collector
+노드가 파이썬 모듈을 직접 import하지 않고도 표준 프로토콜로 호출할 수 있다.
+
+**중요한 설계 판단 - `server.py`는 그대로 collector.py를 직접 호출한다.** MCP 서버는
+`server.py`를 대체하는 게 아니라, "이 앱 바깥"에서 논문 검색 기능을 재사용하기 위한
+**별도의 진입점**이다. 같은 프로세스 안에서 이뤄지는 호출(웹 서비스의 `/api/send-now`)까지
+프로토콜 왕복으로 바꿀 이유가 없어서, `_clusters_from_keyword_groups()` 기반의
+멀티클러스터 우선순위 랭킹 로직은 그대로 `server.py`/`collector.py`에 남겨뒀다.
+
+**패키지**: `mcp[cli]` (공식 MCP Python SDK, `uv add "mcp[cli]"`로 설치). 이 SDK는
+버전에 따라 공개 API가 크게 바뀌므로 주의할 것 - `mcp==2.0.0` 기준으로는 이전에
+흔히 알려진 `from mcp.server.fastmcp import FastMCP`가 **더 이상 존재하지 않고**,
+`from mcp.server.mcpserver import MCPServer`로 이름과 경로가 바뀌었다 (클래스 이름
+자체가 `FastMCP` → `MCPServer`). 새 세션에서 이 코드를 보고 옛날 이름으로 되돌리려
+하지 말 것 - 설치된 버전을 `python -c "import mcp.server; help(...)"`로 직접 확인하고
+맞춰야 한다.
+
+**노출한 도구 2개** (둘 다 `collector.py` 함수를 얇게 감싼 것 - 새 로직을 만들지 않음):
+```python
+list_daily_papers(date: str | None = None, top_n: int = 30) -> list[dict]
+# fetch_top_daily_papers()를 그대로 노출. 키워드 필터 없이 "오늘 뭐가 화제인지" 훑어볼 때.
+
+search_papers(keyword_groups: list[list[str]], date: str | None = None, top_n: int = 30) -> list[dict]
+# filter_by_keywords()를 감쌈. keyword_groups는 "그룹의 리스트"로, 그룹 사이는 AND,
+# 그룹 안 키워드끼리는 OR - collector.py의 클러스터 매칭 규칙(_matches_cluster)을
+# 그대로 일반화한 것이다. 그룹 하나만 넘기면 기존 클러스터의 평범한 OR 리스트와
+# 동일하고, 그룹 두 개를 넘기면 KEYWORD_CLUSTERS의 time_series처럼 AND 조건이 된다.
+# seen_ids는 명시적으로 빈 집합을 넘긴다 - 안 그러면 filter_by_keywords의 기본값이
+# 개인용 스크립트의 seen_papers.json 파일을 읽어버려서, 이 범용 검색 도구의 결과가
+# 이 서버를 실행하는 로컬 머신의 개인 발송 이력에 은근슬쩍 좌우되게 된다.
+```
+
+**실행 방법:**
+```bash
+uv run mcp dev mcp_server.py      # MCP Inspector(웹 UI)로 도구 직접 테스트
+uv run python mcp_server.py       # stdio 서버로 실행 (Claude Desktop 등 클라이언트가 이 커맨드로 subprocess 실행)
+```
+
+**검증 방법**: Claude Desktop 없이도, `mcp.client.stdio.stdio_client` +
+`mcp.client.session.ClientSession`으로 실제 stdio 프로토콜을 통해 도구를 호출하는
+테스트 스크립트를 스크래치패드에 작성해서 확인했다 (`session.call_tool(...)`의
+결과는 `.content`가 아니라 `.structured_content["result"]`에 파싱된 리스트가 들어
+있음 - `.content`의 텍스트 블록은 별도로 문자열화된 표현이라 이중 디코딩하면
+문자열을 문자 단위로 순회하게 되는 함정이 있었음). `search_papers`에 그룹을
+하나(OR)/둘(AND)로 각각 호출해 교집합 개수가 실제로 줄어드는 것까지 확인함.
+
+## LangGraph 파이프라인
+
+`pipeline_graph.py`에 Collector/Filter/Summarizer를 LangGraph의 `StateGraph` 노드로
+그래프화했다. 기존에는 `main.py`/`server.py`가 `collect_papers()`(collector+filter가
+이미 합쳐진 함수) -> `summarize_papers()`를 순서대로 그냥 파이썬 함수 호출로
+이어붙였는데, 이제는 세 단계를 명시적인 그래프 노드(`collector` -> `filter` ->
+`summarizer`, 지금은 선형)로 표현한다. 실질 동작은 바뀌지 않지만, 다음 단계들
+(로드맵 6번 RAGAS 품질 평가 노드 추가, 요약 실패 시 재시도/분기 등)을 그래프에
+자연스럽게 끼워 넣을 수 있는 구조를 미리 만들어두는 것이 목적 - 로드맵 인트로에서
+말한 "멀티에이전트 오케스트레이션" 문제를 해결하는 단계.
+
+**MCP 서버(4번)와의 관계 - 여기서도 같은 판단을 반복했다.** `pipeline_graph.py`의
+`collector_node`/`filter_node`는 `mcp_server.py`의 도구를 호출하지 않고
+`collector.py`를 그대로 import해서 쓴다. 같은 프로세스 안에서 도는 파이프라인을
+굳이 MCP 프로토콜 왕복으로 바꿀 이유가 없기 때문 - MCP 서버는 "이 앱 바깥"에서
+재사용하기 위한 별도 진입점이라는 4번 섹션의 설계 판단을 그대로 따른 것이다.
+
+**State 스키마** (`TypedDict`, `pipeline_graph.PipelineState`):
+```python
+target_date: str | None       # 입력 - 없으면 어제 날짜
+top_n: int                    # 입력 - HF Daily Papers 상위 몇 개를 볼지
+clusters: dict | None         # 입력 - collector.py의 클러스터 형식 (None이면 KEYWORD_CLUSTERS 기본값)
+seen_ids: set | None           # 입력 - 이미 보낸 논문 hf_id 집합
+papers_per_send: int           # 입력 - 필터 통과 논문 중 몇 편을 요약/발송할지
+raw_papers: list[dict]         # collector 노드 출력
+filtered_papers: list[dict]    # filter 노드 출력 (matched_clusters 포함, 랭킹 정렬됨)
+summarized_papers: list[dict]  # summarizer 노드 출력 (summary 필드 추가) - 최종 결과물
+```
+
+`run_pipeline(target_date, top_n, clusters, seen_ids, papers_per_send)`이 그래프를
+`invoke()`하고 최종 state 전체를 그대로 반환한다 - 최종 결과물은
+`result["summarized_papers"]`지만, `result["filtered_papers"]`(개수/매칭 클러스터)도
+그대로 남아있어 `main.py`가 콘솔 로그에 그대로 활용한다. `summarizer_node`는
+필터 통과 논문이 0편이면 Gemini 클라이언트를 만들 필요도 없이 바로 빈 리스트를
+반환한다 (불필요한 API 호출/키 검증 방지).
+
+`main.py`와 `server.py`의 `/api/send-now`는 각각 `collect_papers()`+
+`summarize_papers()`를 직접 이어붙이던 자리를 `run_pipeline()` 호출 하나로
+대체했다 - 개인용 스크립트/웹 서비스 양쪽 다 동일한 그래프를 재사용한다.
+
+**검증**: `papers_per_send=0`으로 그래프 연결(collector -> filter까지만 실행되고
+summarizer가 조기 종료되는지)을 먼저 확인하고, `papers_per_send=1`로 실제 Gemini
+API까지 호출되는 종단간 테스트를 1건만 돌려 무료 티어 할당량을 아끼면서 확인했다.
+Docker 이미지도 `langgraph` 의존성 포함해서 재빌드 후 컨테이너 기동까지 확인함.
+
+## 요약 품질 평가 (evaluator.py)
+
+**ragas 패키지를 포기한 이유 (중요 - 다시 시도하지 말 것):** 로드맵 6번은 원래
+"RAGAS로 요약 품질 평가 하네스 구축"이었지만, 실제로 시도해보니 두 가지 이유로
+포기하고 직접 구현했다.
+
+1. **ragas 패키지 자체가 langgraph와 같은 환경에 설치 불가능한 버그가 있음.**
+   `ragas`(0.4.3, 0.3.9 둘 다 확인)는 `ragas/llms/base.py`에서 무조건
+   `from langchain_community.chat_models.vertexai import ChatVertexAI`를
+   import하는데, 이 서브모듈이 최신 `langchain-community`(sunset되면서 개별
+   통합 패키지로 이전 중)에는 더 이상 없다 - ragas가 `langchain-community`
+   버전을 제대로 고정해두지 않은 ragas 쪽의 실제 패키징 버그다. 우회하려고
+   `langchain-community`를 예전 버전(0.3.19)으로 고정해봤지만, 그 버전은
+   `langchain-core<1.0.0`을 요구하는 반면 우리가 로드맵 5번에서 이미 설치한
+   `langgraph==1.2.10`은 `langchain-core>=1.4.7`을 요구해서 **uv 리졸버가 명확히
+   "동시에 만족 불가능"이라고 실패**했다. 즉 지금 이 프로젝트에서는 ragas와
+   langgraph를 같은 가상환경에 공존시킬 방법이 없다 (별도 가상환경으로 완전히
+   격리하면 가능하지만, 운영 부담 대비 이득이 크지 않다고 판단해 보류).
+2. **애초에 RAGAS의 핵심 지표가 이 파이프라인에 잘 안 맞음.** RAGAS는
+   "질문 -> 검색된 문서 -> 답변" 구조의 RAG 시스템을 겨냥한 지표(Context
+   Precision/Recall 등)가 중심인데, 이 파이프라인은 Collector(upvotes 정렬) ->
+   Filter(규칙 기반 키워드 매칭) -> Summarizer(요약)라 "검색" 단계가 없다.
+   평가가 실제로 의미 있는 단계는 Summarizer 하나뿐이다 (Collector/Filter는
+   결정론적 로직이라 애초에 "품질"을 평가할 대상이 아님).
+
+**그래서 한 것**: `evaluator.py`에 Gemini 자신을 심사자(LLM-as-judge)로 쓰는
+자체 채점 로직을 직접 구현했다 (keyword_chat.py와 같은 function calling 패턴
+재사용). 채점 기준 3가지:
+- `faithful`: 요약이 초록에 없는 내용(수치/방법론/결과)을 지어내지 않았는가 - Gemini 판단
+- `relevant`: 요약이 논문의 핵심 아이디어/기여를 담고 있는가 - Gemini 판단
+- `concise`: `summarizer.py`가 지시하는 150자 제약을 지켰는가 - LLM 호출 없이
+  `len(summary)`로 바로 계산 (결정론적이라 굳이 LLM에 물어볼 필요 없음)
+
+`evaluate_summaries(papers)`가 각 논문에 `judgment` 필드를 붙여 반환하고,
+`summarize_evaluation(results)`가 `faithful_rate`/`relevant_rate`/`concise_rate`로
+종합한다. `uv run python evaluator.py`로 실행하면 `pipeline_graph.run_pipeline()`을
+조금만(기본 3편) 돌려서 채점 리포트를 콘솔에 출력한다 - Gemini 무료 티어
+할당량(20건/일)이 빠듯해서, 요약 1건당 채점도 1건씩 추가로 드니 샘플 크기를
+일부러 작게 유지한다.
+
+**검증**: 파이프라인을 통해서가 아니라, 충실한 요약 하나 + 초록에 없는 내용(양자
+컴퓨팅, 100배 속도, 99.9% 정확도)을 지어낸 요약 하나를 직접 만들어서
+`evaluate_summaries()`에 넣어봤다 - 충실한 쪽은 `faithful=True`, 지어낸 쪽은
+`faithful=False`로 정확히 구분해내는 것을 확인했다 (이 판별력 테스트가 실제
+파이프라인을 돌려보는 것보다 하네스가 제대로 작동하는지 더 직접적으로 검증해준다).
 
 ## 코딩/설계 컨벤션
 
-- uv만 사용. 인증/DB/세션은 라이브러리에 최대한 위임.
-- 카카오 발송은 "나에게 보내기" API, 사용자별 refresh_token으로 access_token 자동 갱신 필수.
-- 커밋은 기능 단위로 잘게 (예: `feat: 카카오 소셜 로그인 추가`).
-- `.env`는 절대 커밋하지 않고 `.env.example`만 유지.
+- 패키지 관리: uv만 사용. `pip install`이나 `requirements.txt` 다시 만들지 말 것
+- 인증/DB/세션은 라이브러리(Authlib, SessionMiddleware, SQLAlchemy 등)에 최대한 의존하고
+  직접 구현을 최소화할 것 - 핵심 로직에 리소스를 집중하기 위함
+- 카카오 발송: "나에게 보내기" API. 사용자별 refresh_token으로 access_token 자동 갱신 필수
+- 각 단계 변경 시 커밋 단위를 기능 단위로 잘게 나눌 것 (예: `feat: 카카오 소셜 로그인 추가`)
+- 비밀값(.env)은 절대 커밋하지 않음, `.env.example`만 레포에 유지
 
 ## 다음에 할 일
 
-완료: 로드맵 1~6. 지금은 **로드맵 7 (직무 갭 분석 에이전트)** 를 `docs/career_agent.md`의
-구현 순서대로 진행한다. 변경 시 이 파일의 로드맵 체크박스를 갱신할 것.
-
-**지금 바로 (사용자가 직접)**
-- 사람인 API access-key, 워크넷 인증키 신청 (승인 대기 중에는 샘플/목 데이터로 A-1~A-5 진행)
-
-**구현 순서 (A-1 -> A-8)**
-1. A-1 공고 수집/구조화/스킬 정규화 + DB 스키마 (`jobs_ingest.py`, `skill_aliases`)
-2. A-2 공고 검색 도구 + 벡터 인덱스 (`search_jobs`, `get_job_detail`) - 의존성 호환 확인 후 저장소 결정
-3. A-3 ① 상황 파악 에이전트 (직무 확정 + 증거 슬롯/신뢰도, 대화 경로만)
-4. A-4 ③ 갭 분석 (`compute_gap` 순수 함수 + 갭 카드)
-5. A-5 Planner 라우팅 + 되돌아가기 시나리오 4개 + 체크포인터
-6. A-6 `/career` 프론트 + 홈 진입점 + 마이페이지 + 키워드 그룹 연결
-7. A-7 평가 하네스 (`career_eval.py`)
-8. A-8 이력서 업로드 (선택 기능, 마지막. 착수 전 LLM 무료 티어 데이터 약관 확인)
-
-**팀 분담 제안**: 담당 A = A-3~A-7(에이전트/프론트), 담당 B = A-1~A-2(데이터/검색) + 이후 로드맵 8(AWS).
-공유 파일(`server.py`, `db.py`, 의존성)은 PR을 작게 나눠 충돌을 줄인다.
-
-**그 다음**: 로드맵 8 (AWS 배포 + 도메인 + 스케줄링 - 공고 수집 배치 스케줄도 여기서 함께 붙임) -> 선택 항목(9, 10) -> 11.
+2-1~2-5, 3(Docker 컨테이너화), 4(MCP 서버 분리), 5(LangGraph 그래프화),
+6(요약 품질 평가 - ragas 대신 evaluator.py 직접 구현)까지 완료됨. 다음은 로드맵
+7번(AWS 배포 + 도메인 연결 + 스케줄링)부터 진행. 진행하기 전에 이 파일의 로드맵
+체크리스트를 업데이트해서 어디까지 했는지 계속 반영할 것.
