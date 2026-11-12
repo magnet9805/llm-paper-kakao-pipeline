@@ -337,7 +337,7 @@ async def send_now_endpoint(user_id: int = Depends(require_login)):
     이 사용자의 DB 레코드로, 중복 방지는 이 사용자의 발송 이력(sent_papers)으로
     바꿔치기한 것 - "사용자별 키워드로 파라미터화"의 핵심이 이 함수다.
 
-    자동 스케줄링(매일 정해진 시각에 알아서 실행)은 아직 없다 - 로드맵 7번
+    자동 스케줄링(매일 정해진 시각에 알아서 실행)은 아직 없다 - 로드맵 8번
     (AWS EventBridge)에서 붙일 예정이고, 그때까지는 이 API를 직접 호출해야 한다.
     """
     user = get_user(user_id)
