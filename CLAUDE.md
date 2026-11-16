@@ -70,8 +70,13 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
    - [ ] 7-3. 발송 파이프라인을 "발송 결정(새벽)"과 "발송(아침)"으로 분리 + 발송 결정 시
      전문·레퍼런스 수집, 레퍼런스 중요도 계산, 브리핑 생성 (비동기)
    - [ ] 7-4. 논문 분석 에이전트 / RAG 에이전트 (섹션 청킹, 하이브리드 검색: 벡터 + BM25 + RRF)
+     - [x] 에이전트 검색 로직 (`reading/` 패키지, 테스트용 저장소 기준 - 아래 "AI와 함께 읽기 -
+       에이전트 구현" 참고). 섹션 청킹 자체는 적재(DB 파트) 쪽 작업
+     - [ ] 실제 DB 저장소(`ReadingStore` 구현)와 통합 - DB 파트 완료 후
    - [ ] 7-5. 라우터 + 통합 에이전트를 LangGraph로 연결 + "AI와 함께 읽기" UI/API
      (카카오 메시지의 링크로 웹 페이지 진입)
+     - [x] 라우터 + 통합 에이전트 + LangGraph 연결 (`reading/graph.py`의 `ask()`)
+     - [ ] API 엔드포인트 + UI + 카카오 메시지 링크
    - [ ] 7-6. RAGAS 지표로 검색/답변 품질 평가 - ragas 라이브러리는 langgraph와 설치 충돌로
      쓸 수 없으므로, 필요한 지표를 `evaluator.py`의 LLM-as-judge 패턴으로 직접 구현
 8. [ ] AWS 배포 + 도메인 연결 + 스케줄링 (EventBridge/ECS)
@@ -776,6 +781,34 @@ Gemini 무료 티어 할당량이 유한하므로("LLM 모델 선택" 섹션 참
   자주 실패하는 주제(서로 다른 사용자 N명 이상, 최근 M일 이내)를 야간 보강 수집 대기열로 넘겨
   풀이 실제 수요에 맞춰 채워지게 하는 방안. 기록용 DB를 따로 둘지 고민 중. 실패 쿼리는 자연어라
   수집에 쓰려면 키워드로 바꿔야 한다 (라우터 `keywords`를 쓰는 이유).
+
+## AI와 함께 읽기 - 에이전트 구현 (7-4/7-5 일부, `reading/` 패키지)
+
+DB(공용 풀·벡터 DB·별칭 사전·브리핑 적재)는 팀원이 병렬로 개발 중이라, 에이전트는
+**`reading/store.py`의 `ReadingStore` 프로토콜에만 의존**하고 지금은 테스트용
+`FakeReadingStore`(`reading/fixtures/sample_data.json`, 합성 데이터)로 돌린다.
+
+- **DB 파트와의 경계**: 검색 메서드는 임베딩 벡터가 아니라 질의 문자열을 받는다 - 임베딩 모델과
+  벡터 DB는 한 쌍인 DB 쪽 결정이라 쿼리 임베딩도 저장소 안에서 한다. 벡터 검색과 BM25는 별개
+  메서드로 받고, RRF·섹션 가중·중요도 가중·필터 완화·2단계 풀 검색은 에이전트 쪽(`retrieval.py`).
+  그래서 "미결 사항"(벡터 DB, 임베딩 모델, BM25 구현)은 이 코드에서 정하지 않았다.
+- **통합 방법**: `ReadingStore`를 만족하는 클래스를 만들고 `get_store()`에 분기 추가 +
+  `READING_STORE` 환경변수로 선택. `tests/test_reading_store_contract.py`의 fixture에 넣어서
+  통과하면 에이전트 모듈은 수정 없이 붙는다. `paper_id`는 arXiv id(= `sent_papers.hf_id`).
+  청크에 `section_type`(results/method 등, 적재 시 정규화)을 채워줘야 섹션 가중이 제대로 동작한다
+  (없으면 섹션 제목 키워드로 대충 추정하는 최소 보정만 있음).
+- **LLM 호출**: 라우터 1회 + 통합 1회, `need_more_evidence`일 때만 공용 풀 재검색 후 통합 1회
+  (final 모드는 `answer`만 허용) - 최대 3회. 논문 분석/RAG 에이전트는 LLM을 부르지 않는다.
+  function calling은 `mode=ANY`로 강제한다 (`reading/llm.py`).
+- **환각 방지**: 답변에서 근거 목록에 없는 id 인용(`[R9]` 등)은 `finalize`에서 지우고, 인용이
+  하나도 남지 않으면 `found=False`. 다른 논문을 검색한 경우 검색 범위 문구를 붙인다.
+- **조정이 필요한 잠정값** (`retrieval.py`, 환경변수로 덮어쓰기 가능): `READING_TOP_PAPERS`(6),
+  `READING_MIN_RELEVANCE`(0.2 - 실제 임베딩 모델의 코사인 분포에 맞춰 다시 정할 것). 필터 완화
+  기준은 "키워드 필터 후 후보 수 < 넘길 논문 수".
+- **검증**: `uv run pytest` (LLM 없이 가짜 라우터/통합 함수 주입), `uv run python -m reading.demo`
+  (실제 Gemini + 테스트 저장소, 질문당 2~3회 호출).
+- 검색 실패 쿼리 기록(미결 사항)은 구현하지 않았다. 결과의 `searches`/`route.keywords`/`found`로
+  나중에 기록할 수 있게만 열어둠.
 
 ## 코딩/설계 컨벤션
 
