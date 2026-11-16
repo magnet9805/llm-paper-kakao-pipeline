@@ -28,7 +28,7 @@ def run():
     try:
         result = run_pipeline(top_n=TOP_N_CANDIDATES, papers_per_send=PAPERS_PER_DAY)
     except SummaryQuotaExceededError:
-        print("Gemini 무료 티어의 하루 요청 한도(20건)를 다 썼습니다. 내일 다시 실행해주세요.")
+        print("Gemini 무료 티어의 하루 요청 한도를 다 썼습니다(기본/대체 모델 모두). 내일 다시 실행해주세요.")
         return
     candidates = result["filtered_papers"]
     print(f"   -> 키워드 클러스터 매칭 통과: {len(candidates)}편")

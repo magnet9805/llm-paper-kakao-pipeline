@@ -271,7 +271,8 @@ HTML을 직접 렌더링한다 - 이 프로젝트의 리소스는 백엔드/LLM 
 ## LLM 대화형 키워드 추출 - 확정된 스펙 (구현 완료)
 
 아래 스펙대로 `keyword_chat.py`(Gemini function calling) + `POST /api/keyword-chat`
-+ `templates/_chat_modal.html`로 구현 완료됨. 모델은 `gemini-flash-latest`(무료 티어),
++ `templates/_chat_modal.html`로 구현 완료됨. 모델은 `gemini-flash-lite-latest`(무료 티어,
+아래 "LLM 모델 선택" 섹션 참고),
 시스템 프롬프트에서 "대화 초반 1~2턴은 섣불리 제안하지 말 것"과 "keywords는 반드시
 영어로 작성할 것"(논문 원문이 영어라 매칭되려면 영어 표현이어야 함)을 명시한다.
 백엔드는 무상태 - 대화 기록을 서버에 저장하지 않고 프론트가 매 턴 전체 history를
@@ -542,9 +543,35 @@ Docker 이미지도 `langgraph` 의존성 포함해서 재빌드 후 컨테이�
 `evaluate_summaries(papers)`가 각 논문에 `judgment` 필드를 붙여 반환하고,
 `summarize_evaluation(results)`가 `faithful_rate`/`relevant_rate`/`concise_rate`로
 종합한다. `uv run python evaluator.py`로 실행하면 `pipeline_graph.run_pipeline()`을
-조금만(기본 3편) 돌려서 채점 리포트를 콘솔에 출력한다 - Gemini 무료 티어
-할당량(20건/일)이 빠듯해서, 요약 1건당 채점도 1건씩 추가로 드니 샘플 크기를
-일부러 작게 유지한다.
+조금만(기본 3편) 돌려서 채점 리포트를 콘솔에 출력한다 - 요약 1건당 채점도 1건씩
+추가로 들어 Gemini 무료 티어 일일 할당량을 아끼려고 샘플 크기를 일부러 작게 유지한다
+(작성 당시에는 `gemini-flash-latest`의 20건/일 한도 기준이었고, 지금은 Flash-Lite로
+바꿔 여유가 생김 - "LLM 모델 선택" 섹션 참고).
+
+## LLM 모델 선택 (2026-11 결정)
+
+`gemini-flash-latest`(현재 Gemini 3.8 Flash)의 무료 한도가 **분당 5건, 하루 20건**으로
+줄어 개발이 막히게 돼서, 모든 LLM 호출의 기본 모델을 **`gemini-flash-lite-latest`**
+(무료 약 500건/일, 분당 15건)로 바꿨다. 같은 Gemini API·SDK·API 키를 그대로 쓰고
+function calling도 지원해서 코드 구조 변경 없이 모델 이름만 바뀐다.
+
+- **설정**: `summarizer.py`/`keyword_chat.py`/`evaluator.py` 모두 `GEMINI_MODEL`
+  환경변수를 읽고, 기본값이 `gemini-flash-lite-latest`다.
+- **요약 전용 대체 모델**: `summarizer.py`는 기본 모델이 429(일일 한도 초과)를 내면
+  그 실행의 남은 논문을 `GEMINI_FALLBACK_MODEL`(기본값 `gemma-4-26b-a4b-it`, 무료 약
+  14,400건/일)로 요약한다. 둘 다 429면 `SummaryQuotaExceededError`.
+  Gemma는 `system_instruction` 요청에서 간헐적으로 500을 내서, 대체 모델일 때만
+  지시문을 본문 앞에 붙여 1회 재시도한다.
+- **Gemma를 기본 모델로 쓰지 않는 이유** (실측, HF Daily Papers 4편 비교):
+  요약 품질(150자 준수, 내용)은 Flash-Lite와 비슷했지만, 1편당 44~99초(Flash-Lite는
+  1~5초)로 느리고, `gemma-4-31b-it`는 4편 중 2편이 500/503으로 실패했다(26B는 4/4 성공,
+  1편은 재시도로 성공). 키워드 챗·평가기·7번 라우터/통합 에이전트처럼 function calling이
+  필요한 곳에는 Gemma를 쓰지 않는다 (Gemini API의 Gemma function calling 지원은 미검증).
+- **검토했으나 쓰지 않은 대안**: Groq 무료 티어(모델당 1,000건/일, OpenAI 호환이라 호출부
+  재작성 필요 - Gemini 한도가 또 줄면 1순위 백업), OpenRouter `:free`(50건/일),
+  Cerebras(무료 티어 종료 보고).
+- 무료 한도는 Google 공식 문서에 숫자로 나오지 않고 AI Studio의 프로젝트별 Rate limit
+  페이지에만 나온다. 한도는 API 키가 아니라 **프로젝트 단위**다.
 
 **검증**: 파이프라인을 통해서가 아니라, 충실한 요약 하나 + 초록에 없는 내용(양자
 컴퓨팅, 100배 속도, 99.9% 정확도)을 지어낸 요약 하나를 직접 만들어서
@@ -730,7 +757,7 @@ EventBridge)에서 붙이지만, 로컬 개발 중에는 두 단계를 각각 �
 - `need_more_evidence(missing: str)`: 무엇이 부족한지 적고 추가 검색 요청
 
 **LLM 호출 예산**: 근거가 충분하면 질문당 2회(라우터 + 통합), 부족할 때만 1회 추가 - 최악 3회.
-Gemini 무료 티어 할당량이 빠듯하므로(6번 섹션 참고) 이 상한을 넘기는 설계 변경은 피할 것.
+Gemini 무료 티어 할당량이 유한하므로("LLM 모델 선택" 섹션 참고) 이 상한을 넘기는 설계 변경은 피할 것.
 
 **근거가 부족할 때:**
 - 재검색: 결과가 없거나 관련도 점수가 낮으면 쿼리를 넓혀 1회만 재검색한다. 이 재작성은 LLM 없이

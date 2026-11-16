@@ -354,7 +354,7 @@ async def send_now_endpoint(user_id: int = Depends(require_login)):
             top_n=TOP_N_CANDIDATES, clusters=clusters, seen_ids=seen_ids, papers_per_send=PAPERS_PER_SEND
         )
     except SummaryQuotaExceededError:
-        # Gemini 무료 티어는 하루 20건으로 제한돼 있어 자주 겪을 수 있는 오류라,
+        # 기본 모델(Flash-Lite)과 대체 모델(Gemma 4) 모두 무료 티어 일일 한도를 넘긴 경우라,
         # 500 에러로 그냥 터뜨리지 않고 사용자가 이해할 수 있는 메시지로 바꿔준다.
         raise HTTPException(
             status_code=429, detail="오늘 요약 가능 횟수를 다 썼어요. 내일 다시 시도해주세요."
