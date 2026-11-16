@@ -11,7 +11,7 @@ import os
 from google import genai
 from google.genai import types
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 SYSTEM_PROMPT = (
     "너는 AI/ML 논문에 관심있는 사용자가 자신의 관심 키워드를 구체화하도록 "

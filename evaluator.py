@@ -25,7 +25,7 @@ import os
 from google import genai
 from google.genai import types
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
 SUMMARY_LENGTH_LIMIT = 150  # summarizer.py의 SYSTEM_PROMPT가 지시하는 길이 제약과 동일
 
 JUDGE_SYSTEM_PROMPT = (
@@ -124,7 +124,7 @@ if __name__ == "__main__":
 
     from pipeline_graph import run_pipeline
 
-    SAMPLE_SIZE = 3  # Gemini 무료 티어 할당량(20건/일)을 아끼기 위해 소수만 스팟체크
+    SAMPLE_SIZE = 3  # Gemini 무료 티어 일일 할당량을 아끼기 위해 소수만 스팟체크
 
     print("=== 평가 항목 안내 ===")
     print("faithful : 요약이 초록에 없는 내용(수치/방법론/결과)을 지어내지 않았는가 (Gemini 판단)")
