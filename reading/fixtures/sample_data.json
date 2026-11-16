@@ -1,0 +1,156 @@
+{
+  "_comment": "테스트용 합성 데이터 - DB 파트 통합 전까지 FakeReadingStore가 읽는다. 발송 논문 test.00001은 가상의 논문이고, 나머지 초록은 실제 논문을 짧게 의역한 것이라 원문 초록이 아니다. 형태는 reading/schemas.py의 TypedDict와 1:1로 대응한다.",
+  "coverage": {"source": "arXiv", "date_from": "2007-04", "date_to": "2026-10"},
+  "papers": [
+    {
+      "paper_id": "test.00001",
+      "title": "AdaDraft: Adaptive Draft Length for Speculative Decoding",
+      "abstract": "Speculative decoding accelerates large language model inference by letting a small draft model propose several tokens that the target model verifies in parallel. Existing methods use a fixed draft length, which wastes computation when the draft model is likely to be rejected. We propose AdaDraft, which predicts the acceptance probability of each drafted token with a lightweight head and stops drafting adaptively. AdaDraft preserves the target model's output distribution and improves wall-clock speedup over fixed-length speculative decoding on summarization, code and math benchmarks.",
+      "published": "2026-11-10",
+      "keyword_ids": ["K_spec_decoding", "K_llm_inference"],
+      "has_fulltext": true
+    },
+    {
+      "paper_id": "2211.17192",
+      "title": "Fast Inference from Transformers via Speculative Decoding",
+      "abstract": "Inference from large autoregressive models is slow because decoding K tokens takes K serial runs of the model. We introduce speculative decoding, an algorithm that samples from autoregressive models faster without changing the outputs, by computing several tokens in parallel. An efficient approximation model proposes tokens, and the large target model evaluates them in parallel, accepting them with a modified rejection sampling scheme that guarantees an identical output distribution. We demonstrate 2x-3x acceleration on T5-XXL without retraining or architecture changes.",
+      "published": "2022-11-30",
+      "keyword_ids": ["K_spec_decoding", "K_llm_inference"],
+      "has_fulltext": true
+    },
+    {
+      "paper_id": "2302.01318",
+      "title": "Accelerating Large Language Model Decoding with Speculative Sampling",
+      "abstract": "We present speculative sampling, an algorithm for accelerating transformer decoding by generating multiple tokens from each call to the target model. A faster but less powerful draft model generates a short continuation, and the target model scores it in parallel; a modified rejection sampling scheme preserves the target distribution. Applied to a 70B parameter model, speculative sampling achieves a 2-2.5x decoding speedup in a distributed setup.",
+      "published": "2023-02-02",
+      "keyword_ids": ["K_spec_decoding", "K_llm_inference"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2401.10774",
+      "title": "Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads",
+      "abstract": "Medusa augments an LLM with extra decoding heads that predict multiple subsequent tokens in parallel, removing the need for a separate draft model. Candidate continuations are organized as a tree and verified simultaneously with a tree-based attention mechanism. Medusa can be fine-tuned on top of a frozen backbone or jointly with it, and provides substantial speedups without degrading generation quality.",
+      "published": "2024-01-19",
+      "keyword_ids": ["K_spec_decoding", "K_llm_inference"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2401.15077",
+      "title": "EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty",
+      "abstract": "EAGLE performs autoregression at the feature level (the second-to-top layer) rather than the token level, and resolves feature uncertainty by feeding the token sequence one step ahead. This makes drafting cheaper and more accurate than token-level drafting, yielding higher acceptance rates while keeping the output distribution of the target model unchanged.",
+      "published": "2024-01-26",
+      "keyword_ids": ["K_spec_decoding", "K_llm_inference"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2309.06180",
+      "title": "Efficient Memory Management for Large Language Model Serving with PagedAttention",
+      "abstract": "High-throughput LLM serving is limited by the memory used by the key-value cache, which grows and shrinks dynamically. We propose PagedAttention, inspired by virtual memory paging in operating systems, and build vLLM on top of it. vLLM achieves near-zero waste in KV cache memory and flexible sharing of KV cache across requests, improving throughput of popular LLMs compared to prior serving systems.",
+      "published": "2023-09-12",
+      "keyword_ids": ["K_kv_cache", "K_llm_inference"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2110.14168",
+      "title": "Training Verifiers to Solve Math Word Problems",
+      "abstract": "We introduce GSM8K, a dataset of grade school math word problems, to diagnose the failures of current models on multi-step mathematical reasoning. We propose training verifiers to judge the correctness of model completions and show that verification improves performance over fine-tuning baselines.",
+      "published": "2021-10-27",
+      "keyword_ids": ["K_math_reasoning"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2309.08168",
+      "title": "Draft & Verify: Lossless Large Language Model Acceleration via Self-Speculative Decoding",
+      "abstract": "We present self-speculative decoding, which accelerates LLMs without an auxiliary draft model. The drafting stage skips a subset of intermediate layers of the LLM itself to generate draft tokens quickly, and the verification stage uses the original full model to validate them in one forward pass, guaranteeing identical outputs. The method needs no extra training and no extra memory footprint.",
+      "published": "2023-09-15",
+      "keyword_ids": ["K_spec_decoding", "K_llm_inference"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2005.11401",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "abstract": "We explore retrieval-augmented generation (RAG) models which combine a pre-trained seq2seq model with a dense vector index of Wikipedia accessed by a neural retriever. RAG models generate more specific, diverse and factual language than parametric-only baselines on knowledge-intensive tasks such as open-domain question answering.",
+      "published": "2020-05-22",
+      "keyword_ids": ["K_rag"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2201.11903",
+      "title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+      "abstract": "We show that generating a chain of thought, a series of intermediate reasoning steps, significantly improves the ability of large language models to perform complex reasoning. Chain-of-thought prompting with a few exemplars improves performance on arithmetic, commonsense and symbolic reasoning tasks.",
+      "published": "2022-01-28",
+      "keyword_ids": ["K_cot", "K_math_reasoning"],
+      "has_fulltext": false
+    },
+    {
+      "paper_id": "2210.03629",
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+      "abstract": "ReAct prompts large language models to generate reasoning traces and task-specific actions in an interleaved manner, allowing the model to interact with external tools such as a Wikipedia API. ReAct improves interpretability and outperforms imitation and reinforcement learning baselines on interactive decision making benchmarks.",
+      "published": "2022-10-06",
+      "keyword_ids": ["K_agent", "K_cot"],
+      "has_fulltext": false
+    }
+  ],
+  "briefings": [
+    {
+      "paper_id": "test.00001",
+      "problem": "기존 speculative decoding은 draft 길이(한 번에 제안하는 토큰 수)를 고정해서, draft가 거절될 가능성이 높은 구간에서도 draft 모델 연산을 낭비한다.",
+      "method": "draft 토큰마다 target 모델에게 채택될 확률을 예측하는 경량 acceptance head를 draft 모델에 붙이고, 누적 채택 확률이 임계값 아래로 떨어지면 drafting을 멈춘다. 검증은 기존 rejection sampling을 그대로 써서 출력 분포를 보존한다.",
+      "contribution": "1) 토큰 단위 적응형 draft 길이 결정, 2) 출력 분포 보존 증명, 3) 요약/코드/수학 벤치마크에서 고정 길이 대비 wall-clock 속도 향상.",
+      "limitation": "acceptance head를 target 모델별로 따로 학습해야 하고, 배치 크기가 큰 서빙 환경에서는 이득이 줄어든다. draft 모델과 target 모델의 토크나이저가 같아야 한다."
+    }
+  ],
+  "references": {
+    "test.00001": [
+      {"paper_id": "2211.17192", "importance": 95},
+      {"paper_id": "2302.01318", "importance": 70},
+      {"paper_id": "2401.10774", "importance": 35},
+      {"paper_id": "2401.15077", "importance": 40},
+      {"paper_id": "2309.06180", "importance": 10},
+      {"paper_id": "2110.14168", "importance": -30}
+    ]
+  },
+  "chunks": [
+    {
+      "chunk_id": "test.00001#0", "paper_id": "test.00001", "section": "1 Introduction", "section_type": "introduction",
+      "text": "Autoregressive decoding of large language models is memory-bandwidth bound: each generated token requires a full forward pass of the model. Speculative decoding (Leviathan et al., 2023; Chen et al., 2023) mitigates this by drafting several tokens with a small model and verifying them in parallel with the target model. However, all existing variants fix the draft length gamma in advance. When the draft model enters a region where it disagrees with the target, the remaining drafted tokens are rejected and their computation is wasted. Our work was directly motivated by the observation in Leviathan et al. that the optimal gamma depends on the acceptance rate, which varies token by token."
+    },
+    {
+      "chunk_id": "test.00001#1", "paper_id": "test.00001", "section": "2 Related Work", "section_type": "related_work",
+      "text": "Draft-model based approaches include speculative decoding and speculative sampling. Medusa (Cai et al., 2024) replaces the draft model with additional decoding heads and tree attention, and EAGLE (Li et al., 2024) drafts at the feature level. These methods improve the acceptance rate but still use a fixed draft tree or length. Serving systems such as vLLM optimize KV cache memory and are orthogonal to our method."
+    },
+    {
+      "chunk_id": "test.00001#2", "paper_id": "test.00001", "section": "3 Method: Adaptive Draft Length", "section_type": "method",
+      "text": "We attach an acceptance head, a two-layer MLP, to the last hidden state of the draft model. For each drafted token x_i it predicts p_i, the probability that the target model accepts x_i. Drafting continues while the cumulative product prod_{j<=i} p_j stays above a threshold tau, and stops otherwise. The acceptance head is trained with binary cross-entropy on acceptance labels collected by running standard speculative decoding with gamma=8 on 200k prompts. Verification is unchanged: we use the modified rejection sampling of Leviathan et al. (2023), so the output distribution of the target model is preserved exactly (Theorem 1)."
+    },
+    {
+      "chunk_id": "test.00001#3", "paper_id": "test.00001", "section": "4 Experiments", "section_type": "experiments",
+      "text": "Setup. We use a 68M draft model with a 7B target model and a 160M draft model with a 70B target model. Benchmarks: CNN/DailyMail summarization, HumanEval code generation and GSM8K math. We compare against fixed-length speculative decoding with gamma in {3, 5, 8} and report wall-clock speedup over plain autoregressive decoding at batch size 1 on a single A100. The threshold tau is set to 0.6 for all tasks."
+    },
+    {
+      "chunk_id": "test.00001#4", "paper_id": "test.00001", "section": "5 Results", "section_type": "results",
+      "text": "Table 2: Wall-clock speedup (7B target). Fixed gamma=5: CNN/DM 2.1x, HumanEval 2.6x, GSM8K 2.3x. AdaDraft: CNN/DM 2.5x, HumanEval 3.1x, GSM8K 2.7x. Mean accepted tokens per verification step rises from 3.2 to 3.9. AdaDraft outperforms the best fixed gamma on every task, with the largest gain on HumanEval where acceptance rates vary most within a sequence."
+    },
+    {
+      "chunk_id": "test.00001#5", "paper_id": "test.00001", "section": "6 Limitations", "section_type": "discussion",
+      "text": "The acceptance head must be trained separately for each draft/target pair. At batch size 32 the speedup of AdaDraft over fixed gamma shrinks to 1.05x because verification becomes compute bound. Like other draft-model methods, AdaDraft requires the draft and target models to share a tokenizer."
+    },
+    {
+      "chunk_id": "2211.17192#0", "paper_id": "2211.17192", "section": "3 Speculative Decoding", "section_type": "method",
+      "text": "Let Mp be the target model and Mq a more efficient approximation model. We run Mq autoregressively gamma times to obtain gamma guesses, then run Mp on all guesses in parallel. Each guess x is accepted with probability min(1, p(x)/q(x)); on the first rejection we resample from the adjusted distribution norm(max(0, p - q)). This procedure provably produces samples from Mp. The expected number of tokens per run is (1 - alpha^(gamma+1)) / (1 - alpha), where alpha is the acceptance rate, so the optimal gamma depends on alpha."
+    },
+    {
+      "chunk_id": "2211.17192#1", "paper_id": "2211.17192", "section": "4 Experiments", "section_type": "results",
+      "text": "On T5-XXL (11B) with a T5-small approximation model, speculative decoding achieves a 2.6x to 3.4x wall-clock improvement on translation and summarization with identical outputs, without any retraining or architecture change."
+    }
+  ],
+  "keyword_aliases": {
+    "K_spec_decoding": ["speculative decoding", "speculative sampling", "draft model", "draft-and-verify"],
+    "K_llm_inference": ["llm inference", "inference acceleration", "decoding speedup", "fast inference"],
+    "K_kv_cache": ["kv cache", "key-value cache", "pagedattention"],
+    "K_math_reasoning": ["math reasoning", "mathematical reasoning", "math word problems"],
+    "K_rag": ["retrieval-augmented generation", "rag", "retrieval augmented generation"],
+    "K_cot": ["chain-of-thought", "chain of thought", "cot"],
+    "K_agent": ["llm agent", "tool use", "reasoning and acting"]
+  }
+}
