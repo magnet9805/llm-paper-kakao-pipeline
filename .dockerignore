@@ -9,3 +9,6 @@ __pycache__/
 kakao_token.json
 seen_papers.json
 app.db
+
+# 대용량 원본 데이터 (Kaggle arXiv dump 등) - 이미지에 넣지 않음
+data/

@@ -9,3 +9,6 @@ seen_papers.json
 app.db
 
 .claude/
+
+# 대용량 원본 데이터 (Kaggle arXiv dump 등)
+data/
