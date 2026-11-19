@@ -23,7 +23,8 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-from pool_db import get_pool_connection, init_pool_db, normalize_keyword_text
+from db import get_connection
+from pool_db import init_pool_db, normalize_keyword_text
 
 load_dotenv()
 
@@ -258,7 +259,7 @@ def cmd_load() -> None:
             works[rec["paper_id"]] = rec
     print(f"load: OpenAlex에 있는 논문 {len(works):,}편")
 
-    with get_pool_connection() as conn, conn.cursor() as cur:
+    with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
             CREATE TEMP TABLE tmp_papers (LIKE pool_papers INCLUDING DEFAULTS) ON COMMIT DROP;
             ALTER TABLE tmp_papers DROP COLUMN search_tsv;
@@ -348,7 +349,7 @@ def cmd_status() -> None:
     print(f"[중간 파일] filtered {lines(FILTERED):,} / openalex 조회 {lines(WORKS_CHECKED):,} "
           f"(일치 {lines(WORKS):,}) / 키워드 조회 {lines(KEYWORDS_CHECKED):,} (받음 {lines(KEYWORDS):,})")
     try:
-        with get_pool_connection() as conn:
+        with get_connection() as conn:
             row = conn.execute("""
                 SELECT (SELECT count(*) FROM pool_papers) AS papers,
                        (SELECT count(*) FROM oa_keywords) AS keywords,

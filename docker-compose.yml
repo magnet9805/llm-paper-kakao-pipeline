@@ -6,13 +6,10 @@ services:
     env_file:
       - .env
     environment:
-      # app.db를 이미지 레이어가 아니라 아래 볼륨에 둬서, 컨테이너를 재생성해도
-      # (docker compose down/up, 이미지 재빌드 등) 데이터가 사라지지 않게 한다.
-      - DB_PATH=/app/data/app.db
       # 컨테이너 안에서는 localhost가 아니라 서비스 이름(db)으로 Postgres에 접속한다.
+      # (7-1-f 이전에는 SQLite app.db를 app-data 볼륨에 뒀지만, 이제 모든 데이터가 db 서비스의
+      # pg-data 볼륨에 있어서 web 컨테이너 자체는 상태가 없다.)
       - DATABASE_URL=postgresql://${POSTGRES_USER:-paper}:${POSTGRES_PASSWORD:-paper}@db:5432/${POSTGRES_DB:-paper}
-    volumes:
-      - app-data:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -36,5 +33,4 @@ services:
       retries: 10
 
 volumes:
-  app-data:
   pg-data:

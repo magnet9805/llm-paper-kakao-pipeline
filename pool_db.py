@@ -1,26 +1,18 @@
 """
-공용 논문 풀(로드맵 7번) PostgreSQL 연결 + 스키마.
+공용 논문 풀(로드맵 7번) 스키마.
 
-기존 사용자 데이터(users, keyword_groups 등)는 아직 db.py의 SQLite에 있고, 7-1-f에서
-PostgreSQL로 옮긴다. 그 전까지는 공용 풀만 여기서 관리한다.
+사용자 테이블(db.py)과 같은 PostgreSQL을 쓰므로 연결은 db.get_connection()을 그대로 쓴다.
 
 에이전트 코드는 이 모듈을 직접 쓰지 않고 paper_pool.py의 접근 함수만 호출한다
 (docs/paper_pool_interface.md 참고) - 이 파일은 DB 담당 쪽 내부 구현이다.
 """
 
-import os
 import re
-from contextlib import contextmanager
 
-import psycopg
-from psycopg.rows import dict_row
+from db import get_connection
 
-# docker-compose의 db 서비스 기본값과 맞춘 로컬 개발용 기본값. 컨테이너 안에서는
-# docker-compose.yml이 호스트를 db로 바꾼 DATABASE_URL을 주입한다.
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://paper:paper@localhost:5432/paper")
-
-# 테이블 이름에 oa_ 접두사를 붙인 이유: 기존 SQLite의 사용자 키워드 테이블 이름이
-# 이미 keywords라, 7-1-f에서 같은 Postgres로 옮기면 이름이 충돌한다.
+# 테이블 이름에 oa_ 접두사를 붙인 이유: 사용자 키워드 테이블(db.py) 이름이 이미 keywords라
+# 같은 DB 안에서 이름이 충돌한다.
 SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -80,21 +72,8 @@ CREATE TABLE IF NOT EXISTS pool_meta (
 """
 
 
-@contextmanager
-def get_pool_connection():
-    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
 def init_pool_db() -> None:
-    with get_pool_connection() as conn:
+    with get_connection() as conn:
         conn.execute(SCHEMA)
 
 
