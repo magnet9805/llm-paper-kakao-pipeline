@@ -72,7 +72,8 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
        495편 샘플로 전 단계 검증 완료(재실행해도 중복 없음, 별칭 조회·전문 검색 확인).
        전체 OpenAlex 조회 진행 중 (하루 예산 $1이라 이틀에 나눠 실행) -> 이후 keywords, load
      - [ ] 7-1-e. `paper_pool.py` 구현 (인터페이스 합의 후)
-     - [ ] 7-1-f. 기존 SQLite 테이블(users 등)을 PostgreSQL로 이전 (별도 커밋)
+     - [x] 7-1-f. 기존 SQLite 테이블(users 등)을 PostgreSQL로 이전 (`db.py` 전 함수 테스트,
+       로컬 uvicorn·Docker web 컨테이너 기동 확인. 카카오 로그인 실제 플로우는 브라우저 확인 필요)
    - [ ] 7-2. 키워드 추가 시 풀 검색 + 결과가 적으면 보강 수집 (메타데이터 먼저 저장,
      임베딩은 대기열 -> 야간 일괄 처리)
    - [ ] 7-3. 발송 파이프라인을 "발송 결정(새벽)"과 "발송(아침)"으로 분리 + 발송 결정 시
@@ -145,56 +146,64 @@ GET  /auth/me              → 현재 로그인한 사용자 정보 (JSON API)
   카카오톡 메시지 전송 권한은 `talk_message`를 넣어야 함 - 위 참고.) 안 넣으면 로그인은
   되지만 `nickname`/`profile_image_url`이 조용히 `null`로 온다.
 
-## DB 스키마 (SQLite, 로컬 프로토타입 기준)
+## DB 스키마 (PostgreSQL - 7-1-f에서 SQLite에서 이전)
+
+사용자 데이터(`db.py`)와 공용 논문 풀(`pool_db.py`)이 **같은 PostgreSQL**(docker-compose의 `db`
+서비스, `pgvector/pgvector:pg17`)을 쓴다. 연결은 `db.get_connection()` 하나로 통일
+(`DATABASE_URL` 환경변수, 기본값 `postgresql://paper:paper@localhost:5432/paper`).
+드라이버는 `psycopg`(v3)를 직접 쓴다 - 대량 적재에 COPY가 필요하고, 쿼리가 단순해서 ORM 없이 충분.
 
 ```sql
 -- 카카오 로그인이 곧 회원가입이므로 password 필드 없음.
 -- 카카오 access/refresh token도 여기 같이 저장 (별도 kakao_accounts 테이블 불필요).
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     kakao_id TEXT UNIQUE NOT NULL,
     nickname TEXT,
     profile_image_url TEXT,
     kakao_access_token TEXT NOT NULL,
     kakao_refresh_token TEXT NOT NULL,
     kakao_token_expires_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE keyword_groups (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
     title TEXT NOT NULL,
     source TEXT NOT NULL CHECK (source IN ('manual', 'llm_chat')),
-    is_active INTEGER NOT NULL DEFAULT 1,  -- 그룹별 발송 on/off (아래 섹션 참고)
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,  -- 그룹별 발송 on/off (아래 섹션 참고)
+    created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE keywords (
-    id INTEGER PRIMARY KEY,
-    group_id INTEGER NOT NULL REFERENCES keyword_groups(id) ON DELETE CASCADE,
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    group_id BIGINT NOT NULL REFERENCES keyword_groups(id) ON DELETE CASCADE,
     keyword_text TEXT NOT NULL
 );
 
 -- 개인용 스크립트의 전역 seen_papers.json과 달리, 사용자마다 "이미 보낸 논문"이
 -- 달라야 해서 사용자별로 발송 이력을 남긴다.
 CREATE TABLE sent_papers (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id),
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id),
     hf_id TEXT NOT NULL,
-    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, hf_id)
+    sent_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE (user_id, hf_id)
 );
 ```
 
-> SQLite는 `ON DELETE CASCADE`를 기본적으로 무시한다 - 연결마다 `PRAGMA foreign_keys = ON`을
-> 실행해야 실제로 동작한다 (`db.py`의 `get_connection()`에 이미 반영되어 있음).
+> **컬럼 추가 패턴**: `CREATE TABLE IF NOT EXISTS`는 이미 만들어진 테이블에 새 컬럼을 넣어주지
+> 않는다. 기존 테이블에 컬럼을 추가할 때는 SCHEMA의 CREATE TABLE에 컬럼을 넣고, 같은 SCHEMA에
+> `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...`를 함께 추가한다. (SQLite 시절에는 이걸
+> `_migrate()`에서 `PRAGMA table_info`로 확인했는데, PostgreSQL은 `IF NOT EXISTS` 한 줄로 끝난다.)
 
-> `is_active` 컬럼은 2-5에서 추가됨. `CREATE TABLE IF NOT EXISTS`는 이미 만들어진 테이블에
-> 새 컬럼을 넣어주지 않으므로, `db.py`의 `init_db()`가 `_migrate()`를 통해 기존 `app.db`에
-> `ALTER TABLE ... ADD COLUMN`을 1회성으로 실행해 보정한다 (컬럼이 이미 있으면 아무 것도
-> 안 함). 앞으로 스키마에 컬럼을 더 추가할 때도 이 패턴(SCHEMA에 새 컬럼 추가 + `_migrate()`에
-> 조건부 ALTER 추가)을 재사용하면 된다.
+> **SQLite -> PostgreSQL 이전 시 바뀐 것** (함수 시그니처는 그대로라 server.py/kakao_sender.py 무변경):
+> 자리표시자 `?` -> `%s`, `lastrowid` -> `INSERT ... RETURNING id`, `INSERT OR IGNORE` ->
+> `ON CONFLICT DO NOTHING`, `is_active` INTEGER(0/1) -> BOOLEAN, 날짜 컬럼이 문자열 대신 datetime으로
+> 반환됨(JSON 직렬화는 기존 `default=str`로 처리됨). SQLite의 `PRAGMA foreign_keys = ON`은 불필요
+> (PostgreSQL은 FK/CASCADE가 기본 동작). `DATABASE_URL`은 import 시점이 아니라 연결 시점에 읽는다 -
+> server.py/load_pool.py가 `db`를 import한 **뒤에** `load_dotenv()`를 호출하기 때문.
 
 **관심 키워드 그룹 API 엔드포인트 (구현 완료, `server.py`):**
 ```
@@ -404,12 +413,12 @@ POST /api/keyword-groups      # 등록 확정 시점에만 호출 (title, keywor
   소스 코드만 바뀐 재빌드에서는 의존성 설치 레이어가 캐시돼 재사용된다.
   `--locked`는 `uv.lock`이 `pyproject.toml`과 어긋나 있으면 빌드를 실패시켜서,
   로컬과 다른 버전이 컨테이너에 들어가는 걸 막아준다.
-- **SQLite 영속성**: 컨테이너를 재생성(재빌드, `docker compose down/up`)해도
-  `app.db`가 사라지면 안 되므로, `db.py`의 `DB_PATH`를 `os.environ.get("DB_PATH",
-  "app.db")`로 바꿔 환경변수로 오버라이드 가능하게 했다. `docker-compose.yml`은
-  `app-data`라는 이름의 볼륨을 `/app/data`에 마운트하고 `DB_PATH=/app/data/app.db`를
-  주입한다 - 로컬 실행(`uv run uvicorn ...`)에서는 이 환경변수가 없으니 그대로
-  `app.db`(프로젝트 루트)를 쓴다.
+- **DB 영속성 (7-1-f 이후)**: 모든 데이터가 `db` 서비스(PostgreSQL)의 `pg-data` 볼륨에 있고,
+  `web` 컨테이너 자체는 상태가 없다. `web`에는 호스트를 서비스 이름 `db`로 바꾼 `DATABASE_URL`을
+  주입하고, `depends_on: condition: service_healthy`로 DB가 준비된 뒤에 뜨게 한다. 로컬
+  실행(`uv run uvicorn ...`)에서는 `DATABASE_URL`이 없으니 기본값(`localhost:5432`)으로 같은 컨테이너
+  DB에 붙는다 - 그래서 로컬 실행 전에도 `docker compose up -d db`는 필요하다.
+  (7-1-f 이전에는 SQLite `app.db`를 `app-data` 볼륨 + `DB_PATH` 환경변수로 영속화했었다.)
 - **비밀값**: `.env`는 이미지에 절대 COPY하지 않는다(`.dockerignore`에 명시) -
   `docker-compose.yml`의 `env_file: .env`로 실행 시점에만 컨테이너 환경변수로
   주입한다. `server.py`의 `load_dotenv()`는 `.env` 파일이 없어도 에러 없이
@@ -692,8 +701,8 @@ EventBridge)에서 붙이지만, 로컬 개발 중에는 두 단계를 각각 �
 - 브리핑은 벡터 DB에 넣지 않는다 - 유사도로 찾는 자료가 아니라 `paper_id`로 바로 꺼내 쓰는 자료다.
 - 브리핑은 사용자별로 저장하지 않는다 - 같은 논문이면 받는 사람이 달라도 내용이 같다.
   사용자와 논문의 연결은 기존 `sent_papers`가 맡는다.
-- 새 테이블을 추가할 때는 위 "DB 스키마" 섹션의 패턴(SCHEMA에 추가 + 기존 `app.db` 보정이
-  필요하면 `_migrate()`에 조건부 ALTER)을 따른다.
+- 새 테이블을 추가할 때는 위 "DB 스키마" 섹션의 패턴(SCHEMA에 추가 + 기존 테이블에 컬럼을
+  더할 때는 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`)을 따른다.
 
 ### 키워드 정규화 (별칭 사전)
 

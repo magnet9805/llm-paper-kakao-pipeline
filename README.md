@@ -116,6 +116,7 @@ uv run python main.py
 여러 사용자가 각자 로그인해서 자신의 관심 키워드를 등록/관리하는 버전.
 
 ```bash
+docker compose up -d db              # PostgreSQL (사용자 데이터 + 공용 논문 풀)
 uv run uvicorn server:app --reload
 ```
 
@@ -127,7 +128,8 @@ uv run uvicorn server:app --reload
 - 마이페이지의 **"지금 논문 받아보기"** 버튼을 누르면 그 자리에서 수집 -> 요약 ->
   카카오톡 발송까지 한 번에 실행된다 (발송 꺼둔 그룹은 제외, 자동 스케줄링은 아직 없음
   - 로드맵 8번 참고)
-- 최초 실행 시 `app.db`(SQLite)가 자동 생성됨 (커밋 대상 아님, `.gitignore` 참고)
+- 데이터는 Docker로 띄운 PostgreSQL에 저장되고, 테이블은 서버 최초 실행 시 자동 생성됨
+  (접속 주소는 `DATABASE_URL` 환경변수, 기본값 `postgresql://paper:paper@localhost:5432/paper`)
 
 ## Docker로 실행
 
@@ -141,9 +143,9 @@ docker compose up --build
 - `http://localhost:8000/`으로 접속하는 방식은 로컬에서 `uv run uvicorn`으로 띄웠을
   때와 동일하다 (포트 매핑이 8000:8000이라 카카오 콘솔의 Redirect URI를 새로 등록할
   필요 없음).
-- `app.db`는 이미지 레이어가 아니라 `app-data`라는 이름의 Docker 볼륨에 저장된다
-  (`DB_PATH` 환경변수로 `db.py`에 전달) - `docker compose down` 후 다시 `up`해도
-  데이터가 그대로 남는다. 완전히 초기화하려면 `docker compose down -v`.
+- `web`(웹 서버)과 `db`(PostgreSQL + pgvector) 두 컨테이너가 뜬다. 데이터는 `pg-data`라는
+  Docker 볼륨에 저장돼서 `docker compose down` 후 다시 `up`해도 그대로 남는다.
+  완전히 초기화하려면 `docker compose down -v` (**공용 논문 풀도 같이 지워지니 주의**).
 - 개인용 스크립트(`main.py`)를 컨테이너 안에서 한 번 실행하고 싶다면:
   ```bash
   docker compose run --rm web uv run python main.py
