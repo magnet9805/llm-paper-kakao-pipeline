@@ -9,8 +9,32 @@ services:
       # app.db를 이미지 레이어가 아니라 아래 볼륨에 둬서, 컨테이너를 재생성해도
       # (docker compose down/up, 이미지 재빌드 등) 데이터가 사라지지 않게 한다.
       - DB_PATH=/app/data/app.db
+      # 컨테이너 안에서는 localhost가 아니라 서비스 이름(db)으로 Postgres에 접속한다.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-paper}:${POSTGRES_PASSWORD:-paper}@db:5432/${POSTGRES_DB:-paper}
     volumes:
       - app-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 공용 논문 풀(로드맵 7-1~) - 관계형 + 벡터(pgvector) + 전문 검색을 DB 하나로 처리한다.
+  # 로컬에서 적재 스크립트(uv run python load_pool.py ...)를 돌릴 수 있게 5432를 호스트에 연다.
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-paper}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-paper}
+      - POSTGRES_DB=${POSTGRES_DB:-paper}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paper} -d ${POSTGRES_DB:-paper}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   app-data:
+  pg-data:

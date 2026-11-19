@@ -64,7 +64,15 @@ FastAPI, Docker, MCP, LangGraph/LangChain, RAGAS, AWS, vLLM, A2A
    구현 - 아래 "요약 품질 평가" 섹션 참고)
 7. [ ] AI와 함께 읽기 - 공용 논문 풀 + RAG/멀티에이전트 질의응답 (아래 "AI와 함께 읽기" 섹션 참고)
    - [ ] 7-1. 공용 논문 풀 사전 적재 (Kaggle arXiv dump 중 OpenAlex에 있는 논문, 제목+초록+OpenAlex 키워드)
-     + OpenAlex 키워드 기반 별칭 사전 구축
+     + OpenAlex 키워드 기반 별칭 사전 구축 (아래 "7-1 진행 상황" 참고)
+     - [x] 7-1-a. OpenAlex 샘플 검증 (일치율, `display_name_alternatives` 존재, 과금 구조)
+     - [x] 7-1-b. 접근 함수 인터페이스 초안 (`docs/paper_pool_interface.md`) - 팀원 합의 대기
+     - [x] 7-1-c. docker-compose에 PostgreSQL+pgvector 추가 + 풀 스키마 (`pool_db.py`)
+     - [ ] 7-1-d. 적재 스크립트 `load_pool.py` (filter -> openalex -> keywords -> load, 재개 가능) -
+       495편 샘플로 전 단계 검증 완료(재실행해도 중복 없음, 별칭 조회·전문 검색 확인).
+       전체 OpenAlex 조회 진행 중 (하루 예산 $1이라 이틀에 나눠 실행) -> 이후 keywords, load
+     - [ ] 7-1-e. `paper_pool.py` 구현 (인터페이스 합의 후)
+     - [ ] 7-1-f. 기존 SQLite 테이블(users 등)을 PostgreSQL로 이전 (별도 커밋)
    - [ ] 7-2. 키워드 추가 시 풀 검색 + 결과가 적으면 보강 수집 (메타데이터 먼저 저장,
      임베딩은 대기열 -> 야간 일괄 처리)
    - [ ] 7-3. 발송 파이프라인을 "발송 결정(새벽)"과 "발송(아침)"으로 분리 + 발송 결정 시
@@ -768,9 +776,44 @@ Gemini 무료 티어 할당량이 유한하므로("LLM 모델 선택" 섹션 참
   답변에 검색 범위를 밝힌다 (예: "arxiv에서 00년 00월 ~ 00년 00월까지의 논문을 확인한 결과,
   관련된 논문을 찾기 어려웠어요 ㅠㅠ").
 
+### 역할 분담 (2인 개발)
+
+- **DB 구축 / 서버 구축 / 배포** 담당과 **에이전트 개발 / UI·UX** 담당으로 나뉜다.
+- 두 영역의 접점은 `paper_pool.py` 같은 DB 접근 함수다. 에이전트 코드는 SQL을 직접 쓰지 않고
+  이 함수만 호출한다 - 시그니처는 `docs/paper_pool_interface.md`에서 먼저 합의하고 구현한다.
+
+### 7-1 진행 상황 / 확정된 결정 (2026-11-18)
+
+- **DB: PostgreSQL + pgvector.** 관계형·벡터·전문 검색을 DB 하나로 처리하고, 8번 배포 때
+  AWS RDS로 그대로 옮긴다. 기존 SQLite 테이블(users 등)도 이전한다 (7-1-f).
+- **적재 범위: CS + AI 인접 카테고리만** (cs.*, stat.ML, eess.* 등) - 전체 240만 편이 아님.
+- **Kaggle dump 실측**: 전체 3,252,452편 중 CS+AI 대상(cs.*, eess.*, stat.ML이 카테고리에 하나라도
+  있음) 1,088,909편 -> OpenAlex 조회 약 1.09만 회(약 $1.1, 무료 키로 이틀). dump 파일은 `data/`
+  (gitignore/dockerignore 처리), 중간 산출물은 `data/pool_build/`.
+- **OpenAlex 매칭 함정**: arXiv 판이 학술지 출판본과 한 work로 합쳐진 경우(주로 옛 논문) 응답의
+  `doi`는 학술지 DOI라서, arXiv DOI는 `locations[].id`(`doi:10.48550/arxiv...`, `pmh:oai:arXiv.org:...`)
+  에서 찾아야 한다. `doi`로만 매칭했을 때 2007년 논문 일치율 42% -> 고친 뒤 99%.
+  (`ids.arxiv` 필터는 OR 묶음 조회에서 0건이 나와 쓰지 않음.)
+- **별칭에 slug도 넣는다**: `transformer`의 display_name이 "transformer models"라, slug를 별칭에 넣지
+  않으면 사용자 입력 "transformer"가 안 걸린다.
+- **`paper_id` = 버전 접미사 없는 arXiv ID** (HF `hf_id`/`sent_papers.hf_id`와 같은 체계).
+- **OpenAlex 샘플 검증 결과** (arXiv ID 구간별 100편, DOI `10.48550/arxiv.{id}`로 조회):
+  2019-06 100/100, 2023-06 100/100, 2026-10 89/100 일치, 일치한 논문은 전부 키워드 보유(평균 약 7개).
+  최근 1~2개월 논문은 OpenAlex 반영이 늦어 일부 빠짐 -> 7-2 보강 수집으로 메움.
+- **OpenAlex 키워드 개체**에 `display_name_alternatives`가 실제로 있고 총 1,882,064개. 단 works 응답의
+  keywords에는 별칭이 없어서, 풀에 등장한 keyword_id만 모아 `/keywords`를 별도로 조회해야 한다.
+  별칭은 모호할 수 있다 (예: `transformer`의 별칭에 "electrical transformer models"가 섞여 있음) ->
+  별칭 하나가 여러 keyword_id에 매핑될 수 있게 스키마를 잡는다.
+- **OpenAlex는 이제 API 키 + 일일 예산제다.** 키 없이 쓰면 같은 IP가 하루 $0.10을 공유하고, 무료 키는
+  하루 $1. works 필터 조회 1회 = $0.0001 (DOI 최대 100개를 `|`로 묶어 1회 조회 가능). 적재 스크립트는
+  하루 예산 안에서 끊겨도 이어서 돌 수 있게(재개 가능) 만든다. 키는 `.env`의 `OPENALEX_API_KEY`.
+- 로컬 Python은 `.python-version`으로 3.12에 고정 (Dockerfile과 동일). 고정 전에는 uv가 3.15를
+  골라 휠 없는 패키지(zstandard 등) 빌드에 실패했다.
+
 ### 미결 사항 (구현 전에 사용자와 확인할 것)
 
-- 벡터 DB 종류, 임베딩 모델, BM25 구현 방식
+- ~~벡터 DB 종류~~ -> pgvector로 확정. 임베딩 모델(차원 수가 컬럼을 정하므로 7-2 전에 확정),
+  BM25 구현 방식(Postgres 기본 `ts_rank`는 엄밀한 BM25가 아님 - 확장 사용 여부는 7-4에서 결정)
 - 키워드 추가 시 보강 수집 임계값 (테스트로 결정), 중요 레퍼런스 상위 n편의 n, RRF 상위 개수(5~8 잠정)
 - 검색 실패 쿼리 -> 수집 연결 (검토 중): 검색에 실패한 질문의 라우터 `keywords`를 기록하고,
   자주 실패하는 주제(서로 다른 사용자 N명 이상, 최근 M일 이내)를 야간 보강 수집 대기열로 넘겨
